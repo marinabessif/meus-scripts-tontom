@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tontom-Simap (Servidor)
 // @namespace    simap-tjpe
-// @version      1.1
+// @version      1.2
 // @description  Menu de observações, Prioridades, painel móvel com lógica de fluxo refinada.
 // @match        https://simap.svc.tjpe.jus.br/*
 // @match        https://frontend.pje.cloud.tjpe.jus.br/*
@@ -36,16 +36,26 @@
 
     GM_addStyle(`
         .tag-prioridade {
-            display: inline-block;
-            padding: 2px 6px;
+            display: inline-flex;
+            align-items: center;
             margin-left: 6px;
-            font-weight: bold;
             font-size: 11px;
             color: #fff !important;
             border-radius: 4px;
             text-transform: uppercase;
             box-shadow: 1px 1px 3px rgba(0,0,0,0.15);
             vertical-align: middle;
+            overflow: hidden; /* Essencial para a borda arredondada cortar os elementos de dentro */
+        }
+        .tag-p-letra {
+            background-color: rgba(0, 0, 0, 0.25); /* Fundo 25% mais escuro para destacar o P */
+            padding: 2px 5px;
+            font-weight: 900;
+        }
+        .tag-p-numero {
+            padding: 2px 6px;
+            font-weight: bold;
+            letter-spacing: 0.5px;
         }
         .prio-p1 { background-color: #ef4444 !important; }
         .prio-p2 { background-color: #f97316 !important; }
@@ -97,12 +107,15 @@
         return linhas;
     }
 
-    function extrairPrioridade(textoCelula) {
+function extrairPrioridade(textoCelula) {
         if (!textoCelula) return null;
-        const m = String(textoCelula).trim().match(/^(\d+)/);
+        // Captura números com ou sem decimais (ex: 4, 4.1, 4.2)
+        const m = String(textoCelula).trim().match(/^(\d+(?:[.,]\d+)?)/);
         if (!m) return null;
-        const n = parseInt(m[1], 10);
-        return (n >= 1 && n <= 9) ? n : null;
+        const valorStr = m[1].replace(',', '.'); // Padroniza para ponto
+        const base = parseInt(valorStr, 10);
+        // Retorna a string completa (ex: "4.1") se a base estiver entre 1 e 9
+        return (base >= 1 && base <= 9) ? valorStr : null;
     }
 
     function processarDadosPlanilha(linhasCsv) {
@@ -169,11 +182,14 @@
                             correspondencias.forEach(npuMatch => {
                                 const chave = limparNPU(npuMatch);
                                 if (BANCO_PRIORIDADES.has(chave)) {
-                                    const p = BANCO_PRIORIDADES.get(chave);
+                                    const pStr = BANCO_PRIORIDADES.get(chave); // ex: "4.1" ou "4"
+                                    const pBase = parseInt(pStr, 10); // Extrai apenas a base inteira (ex: 4)
+
                                     const tag = document.createElement("span");
-                                    tag.className = `tag-prioridade prio-p${p}`;
-                                    tag.textContent = `P${p}`;
-                                    tag.title = `Prioridade Nível P${p}`;
+                                    tag.className = `tag-prioridade prio-p${pBase}`; // Usa a cor do grupo base
+                                    tag.textContent = `P-${pStr}`; // Adiciona o tracinho separador
+
+                                    tag.title = `Prioridade Nível P${pStr}`;
                                     el.appendChild(tag);
                                 }
                             });
@@ -614,12 +630,14 @@
                 if (matchNPU) {
                     const chaveNpu = limparNPU(matchNPU[0]);
                     if (BANCO_PRIORIDADES.has(chaveNpu)) {
-                        const nivelPrio = BANCO_PRIORIDADES.get(chaveNpu);
-                        if (nivelPrio >= 1 && nivelPrio <= 4) {
-                            contadoresPrio[nivelPrio].total++;
-                            contadoresPrio[nivelPrio].notif += qtdLivrosNaLinha;
-                            if (isFin) contadoresPrio[nivelPrio].fin++;
-                            else if (isAnd) contadoresPrio[nivelPrio].and++;
+                        const prioridadeStr = BANCO_PRIORIDADES.get(chaveNpu);
+                        const nivelPrioBase = parseInt(prioridadeStr, 10); // Agrupa 4.1 e 4.2 no contador 4
+
+                        if (nivelPrioBase >= 1 && nivelPrioBase <= 4) {
+                            contadoresPrio[nivelPrioBase].total++;
+                            contadoresPrio[nivelPrioBase].notif += qtdLivrosNaLinha;
+                            if (isFin) contadoresPrio[nivelPrioBase].fin++;
+                            else if (isAnd) contadoresPrio[nivelPrioBase].and++;
                         }
                     }
                 }
