@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          Tontom-Simap - Gestores
 // @namespace     simap-tjpe
-// @version      1.1
+// @version      1.2
 // @description   Seletor de equipes, Status, Prioridades e Menu de observações padronizadas- último
 // @match         https://simap.svc.tjpe.jus.br/*
 // @match         https://*.tjpe.jus.br/*
