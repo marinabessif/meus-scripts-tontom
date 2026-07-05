@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Tontom-Simap (Servidor)
 // @namespace    simap-tjpe
-// @version      1.2
-// @description  Menu de observações, Prioridades, painel móvel com lógica de fluxo refinada.
+// @version      1.9
+// @description  Menu de observações, Prioridades, painel móvel com fila de trabalho consolidada, filtros de status, prioridades (P1 a P9) e notificações, botões de cópia individual e redirecionamento de foco por página.
 // @match        https://simap.svc.tjpe.jus.br/*
 // @match        https://frontend.pje.cloud.tjpe.jus.br/*
 // @grant        GM_xmlhttpRequest
@@ -19,6 +19,9 @@
     let varreduraAtiva = false;
     let varreduraPausada = false;
     let abortarVarredura = false;
+
+    // Array global para armazenar os dados dos processos coletados de todas as páginas
+    let processosVarridos = [];
 
     // Objeto global para armazenar os contadores de prioridades em tempo real
     let contadoresPrio = {
@@ -107,7 +110,7 @@
         return linhas;
     }
 
-function extrairPrioridade(textoCelula) {
+    function extrairPrioridade(textoCelula) {
         if (!textoCelula) return null;
         // Captura números com ou sem decimais (ex: 4, 4.1, 4.2)
         const m = String(textoCelula).trim().match(/^(\d+(?:[.,]\d+)?)/);
@@ -173,7 +176,10 @@ function extrairPrioridade(textoCelula) {
         const regexNPU = /\b\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}\b/g;
         const elementos = document.querySelectorAll("td, span, a, div.ui-outputpanel");
         elementos.forEach(el => {
+            // CRÍTICO: Evita injetar tags de prioridade repetidas dentro de qualquer parte do nosso próprio painel ou menu flutuante
+            if (el.closest('#painelContadoresServidor') || el.closest('#containerMenuTontom')) return;
             if (el.querySelector(".tag-prioridade") || el.classList.contains("tag-prioridade")) return;
+
             if (el.childNodes.length > 0) {
                 for (let node of el.childNodes) {
                     if (node.nodeType === Node.TEXT_NODE && regexNPU.test(node.nodeValue)) {
@@ -200,6 +206,9 @@ function extrairPrioridade(textoCelula) {
         });
     }
 
+    function childText(el) {
+        return el.innerText ? el.innerText.trim() : "";
+    }
 
     // ==========================================
     // PARTE 2: LÓGICA DO MENU DE OBSERVAÇÕES
@@ -384,6 +393,7 @@ function extrairPrioridade(textoCelula) {
         const btnCarregar = document.createElement("button");
         btnCarregar.id = "btnGerarContadores";
         btnCarregar.innerText = "📊 Gerar Contadores";
+        btnCarregar.title = "Varre todas as páginas para gerar estatísticas e a Fila de Trabalho consolidada.";
         btnCarregar.style.cssText = "padding: 3px 8px; cursor: pointer; font-weight: bold; font-size: 13px; background: #0d6efd; color: white; border: 1px solid #0a58ca; border-radius: 4px;";
         btnCarregar.onclick = rodarVarreduraServidor;
 
@@ -482,6 +492,46 @@ function extrairPrioridade(textoCelula) {
                         </tr>
                     </table>
                 </div>
+
+                <!-- Seção da Fila de Trabalho Consolidada com Filtros Dinâmicos -->
+                <div id="wrapperFilaTrabalho" style="margin-top: 12px; border-top: 1px dotted #ccc; padding-top: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-weight: bold; font-size: 13px; color: #495057;">📋 Meus processos </span>
+                    </div>
+
+                    <!-- Linha com os Seletores de Filtros -->
+                    <div style="display: flex; gap: 6px; margin-bottom: 6px; align-items: center;">
+                        <select id="filtroStatus" style="flex: 1; padding: 3px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; cursor: pointer; height: 26px;">
+                            <option value="ativos" selected>Status: Ativos (Pen/And)</option>
+                            <option value="todos">Status: Todos</option>
+                            <option value="Pendente">Status: Pendentes</option>
+                            <option value="Em andamento">Status: Em andamento</option>
+                            <option value="Finalizado">Status: Finalizados</option>
+                        </select>
+                        <select id="filtroPrio" style="flex: 1; padding: 3px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; cursor: pointer; height: 26px;">
+                            <option value="todas">Prioridade: Todas</option>
+                            <option value="1">Prioridade: P1</option>
+                            <option value="2">Prioridade: P2</option>
+                            <option value="3">Prioridade: P3</option>
+                            <option value="4">Prioridade: P4</option>
+                            <option value="5">Prioridade: P5</option>
+                            <option value="6">Prioridade: P6</option>
+                            <option value="7">Prioridade: P7</option>
+                            <option value="8">Prioridade: P8</option>
+                            <option value="9">Prioridade: P9</option>
+                            <option value="S/P">Prioridade: Sem Prio (S/P)</option>
+                        </select>
+                        <button id="btnFiltroNotif" data-ativo="false" style="flex: 1; padding: 3px 6px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; color: #495057; font-weight: bold; cursor: pointer; height: 26px; transition: all 0.2s; white-space: nowrap;">
+                            ⚠️ Apenas com Notificação
+                        </button>
+                    </div>
+
+                    <div id="listaFilaTrabalho" style="max-height: 200px; overflow-y: auto; border: 1px solid #ced4da; border-radius: 4px; padding: 4px; background: #f8f9fa;">
+                        <div style="text-align: center; color: #6c757d; font-size: 12px; padding: 10px;">
+                            Clique em "📊 Gerar Contadores" para varrer todas as páginas e montar a fila de prioridades.
+                        </div>
+                    </div>
+                </div>
             </div>
         `;
 
@@ -506,14 +556,322 @@ function extrairPrioridade(textoCelula) {
         btnTogglePrio.onclick = function() {
             if (wrapperPrio.style.display === 'none') {
                 wrapperPrio.style.display = 'block';
-                this.innerText = '🔽 Recolher Detalhamento por Prioridades';
+                this.innerText = '🔽 Recolher Detalhamento';
             } else {
                 wrapperPrio.style.display = 'none';
-                this.innerText = '➕ Mostrar Detalhamento por Prioridades (P1 a P4)';
+                this.innerText = '➕ Contadores por Prioridades (P1-P4)';
             }
         };
 
+        const elStatus = document.getElementById('filtroStatus');
+        const elPrio = document.getElementById('filtroPrio');
+        if (elStatus) elStatus.onchange = () => atualizarFilaTrabalhoPainel();
+        if (elPrio) elPrio.onchange = () => atualizarFilaTrabalhoPainel();
+
+        const btnNotif = document.getElementById('btnFiltroNotif');
+        if (btnNotif) {
+            btnNotif.onclick = () => {
+                const ativo = btnNotif.getAttribute('data-ativo') === 'true';
+                const novoEstado = !ativo;
+                btnNotif.setAttribute('data-ativo', String(novoEstado));
+
+                if (novoEstado) {
+                    btnNotif.style.background = '#dc3545';
+                    btnNotif.style.color = '#fff';
+                    btnNotif.style.borderColor = '#b02a37';
+                } else {
+                    btnNotif.style.background = '#fff';
+                    btnNotif.style.color = '#495057';
+                    btnNotif.style.borderColor = '#ced4da';
+                }
+                atualizarFilaTrabalhoPainel();
+            };
+        }
+
         tornarElementoArrastavel(painel, document.getElementById("cabecalhoPainelServidor"));
+        atualizarFilaTrabalhoPainel();
+    }
+
+    // Função auxiliar para identificar a página ativa no paginador do PrimeNG ou PrimeFaces
+    function obterPaginaAtual() {
+        const paginadorAtivo = document.querySelector('.p-paginator-page.p-highlight, button.p-paginator-page.p-highlight, .ui-state-active, .p-highlight');
+        if (paginadorAtivo) {
+            const parsed = parseInt(paginadorAtivo.innerText.trim(), 10);
+            if (!isNaN(parsed)) return parsed;
+        }
+        return 1;
+    }
+
+    // Função para alterar a página do SIMAP de maneira assíncrona e extremamente robusta
+    async function irParaPagina(numeroPagina) {
+        let paginaAtual = obterPaginaAtual();
+        if (paginaAtual === numeroPagina) return true;
+
+        // 1. Tenta achar o botão direto pelo número da página
+        let botaoAlvo = document.querySelector(`[aria-label="Page ${numeroPagina}"], [aria-label="Página ${numeroPagina}"], [aria-label="page ${numeroPagina}"]`);
+
+        if (!botaoAlvo) {
+            const botoesAria = Array.from(document.querySelectorAll('[aria-label*="Page"], [aria-label*="Página"], [aria-label*="page"]'));
+            botaoAlvo = botoesAria.find(b => {
+                const label = b.getAttribute('aria-label') || "";
+                return label.includes(String(numeroPagina));
+            });
+        }
+
+        if (!botaoAlvo) {
+            const botoes = Array.from(document.querySelectorAll('.p-paginator-page, .p-paginator-pages button, button.p-link, .ui-paginator-page'));
+            botaoAlvo = botoes.find(b => b.innerText.trim() === String(numeroPagina));
+        }
+
+        if (botaoAlvo) {
+            botaoAlvo.click();
+        } else {
+            // 2. Se não achou o botão direto, faz navegação estratégica / passo a passo
+            if (numeroPagina === 1) {
+                const firstBtn = document.querySelector('[aria-label="Primeira Página"], [aria-label="First Page"], .p-paginator-first, .ui-paginator-first');
+                if (firstBtn && !firstBtn.disabled && firstBtn.getAttribute('aria-disabled') !== 'true') {
+                    firstBtn.click();
+                } else {
+                    return false;
+                }
+            } else if (numeroPagina < paginaAtual) {
+                // Tenta ir para a primeira página primeiro se a distância for maior que 1 para acelerar
+                const firstBtn = document.querySelector('[aria-label="Primeira Página"], [aria-label="First Page"], .p-paginator-first, .ui-paginator-first');
+                if (firstBtn && !firstBtn.disabled && firstBtn.getAttribute('aria-disabled') !== 'true' && (paginaAtual - numeroPagina) > 1) {
+                    firstBtn.click();
+                } else {
+                    const prevBtn = document.querySelector('[aria-label="Página Anterior"], [aria-label="Previous Page"], .p-paginator-prev, .ui-paginator-prev');
+                    if (prevBtn && !prevBtn.disabled && prevBtn.getAttribute('aria-disabled') !== 'true') {
+                        prevBtn.click();
+                    } else {
+                        return false;
+                    }
+                }
+            } else {
+                const nextBtn = document.querySelector('[aria-label="Página Seguinte"], [aria-label="Next Page"], .p-paginator-next, .ui-paginator-next');
+                if (nextBtn && !nextBtn.disabled && nextBtn.getAttribute('aria-disabled') !== 'true') {
+                    nextBtn.click();
+                } else {
+                    return false;
+                }
+            }
+        }
+
+        // Aguarda até que a página mude para a desejada (tentativas por até 4 segundos)
+        for (let i = 0; i < 20; i++) {
+            await esperar(200);
+            if (obterPaginaAtual() === numeroPagina) {
+                // Aguarda um pequeno tempo extra para renderização da tabela
+                await esperar(500);
+                return true;
+            }
+        }
+
+        // Se a página mudou mas ainda não é a desejada, continua de forma recursiva
+        const novaPagina = obterPaginaAtual();
+        if (novaPagina !== paginaAtual) {
+            return await irParaPagina(numeroPagina);
+        }
+
+        return false;
+    }
+
+    // Função para navegar até a página correta e focar/piscar a linha do processo na tela
+    async function focarProcessoNaTabela(chaveNpu, numeroPagina) {
+        const paginaAtual = obterPaginaAtual();
+
+        if (paginaAtual !== numeroPagina) {
+            const sucesso = await irParaPagina(numeroPagina);
+            if (!sucesso) {
+                alert(`Não foi possível navegar até a página ${numeroPagina}.`);
+                return;
+            }
+        }
+
+        // CRÍTICO: Exclui o próprio painel da busca para não focar a linha da Fila de Trabalho no painel!
+        const seletorLinhas = 'tr[data-cy="entityTable"], tbody tr';
+        const linhas = Array.from(document.querySelectorAll(seletorLinhas))
+                            .filter(linha => !linha.closest('#painelContadoresServidor'));
+
+        let linhaAlvo = null;
+        linhas.forEach(linha => {
+            const texto = inlineDropdownText(linha) ? "" : (linha.innerText ? linha.innerText.trim() : "");
+            // Procura todas as ocorrências de NPU na linha e verifica qual corresponde à chave
+            const matches = linha.innerText ? linha.innerText.match(/\b\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}\b/g) : null;
+            if (matches) {
+                for (const match of matches) {
+                    if (limparNPU(match) === chaveNpu) {
+                        linhaAlvo = linha;
+                        break;
+                    }
+                }
+            }
+        });
+
+        if (linhaAlvo) {
+            linhaAlvo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+            const corOriginal = linhaAlvo.style.backgroundColor || '';
+            linhaAlvo.style.transition = 'background-color 0.3s';
+            linhaAlvo.style.backgroundColor = '#fff9db'; // Destaque amarelo suave
+
+            setTimeout(() => {
+                linhaAlvo.style.backgroundColor = corOriginal;
+                setTimeout(() => {
+                    linhaAlvo.style.backgroundColor = '#fff9db';
+                    setTimeout(() => {
+                        linhaAlvo.style.backgroundColor = corOriginal;
+                    }, 800);
+                }, 400);
+            }, 1200);
+        } else {
+            alert(`Processo encontrado na página ${numeroPagina}, mas a linha correspondente na tabela não pôde ser carregada. Tente rolar a tabela manualmente.`);
+        }
+    }
+
+    // Atualiza a visualização da fila de trabalho com botões de ação corretos e filtros dinâmicos
+    function atualizarFilaTrabalhoPainel(mensagemStatus) {
+        const container = document.getElementById("listaFilaTrabalho");
+        if (!container) return;
+
+        if (mensagemStatus) {
+            container.innerHTML = `
+                <div style="text-align: center; color: #0d6efd; font-size: 12px; padding: 10px; font-weight: bold;">
+                    ⏳ ${mensagemStatus}
+                </div>`;
+            return;
+        }
+
+        if (processosVarridos.length === 0) {
+            container.innerHTML = `
+                <div style="text-align: center; color: #6c757d; font-size: 12px; padding: 10px;">
+                    Clique em "📊 Gerar Contadores" para varrer todas as páginas e montar a fila de prioridades.
+                </div>`;
+            return;
+        }
+
+        const elStatus = document.getElementById("filtroStatus");
+        const elPrio = document.getElementById("filtroPrio");
+        const btnNotif = document.getElementById("btnFiltroNotif");
+
+        const statusFiltro = elStatus ? elStatus.value : "ativos";
+        const prioFiltro = elPrio ? elPrio.value : "todas";
+        const apenasNotificados = btnNotif ? btnNotif.getAttribute('data-ativo') === 'true' : false;
+
+        let ordenados = [...processosVarridos].sort((a, b) => a.prioValor - b.prioValor);
+
+        // 1. Aplica o filtro de Status
+        if (statusFiltro === "ativos") {
+            ordenados = ordenados.filter(p => p.status !== "Finalizado");
+        } else if (statusFiltro !== "todos") {
+            ordenados = ordenados.filter(p => p.status === statusFiltro);
+        }
+
+        // 2. Aplica o filtro de Prioridade (P1 a P9)
+        if (prioFiltro !== "todas") {
+            if (prioFiltro === "S/P") {
+                ordenados = ordenados.filter(p => p.prioridade === "S/P");
+            } else {
+                ordenados = ordenados.filter(p => {
+                    const pBase = parseInt(p.prioridade, 10);
+                    return String(pBase) === prioFiltro;
+                });
+            }
+        }
+
+        // 3. Aplica o filtro de Apenas Notificados
+        if (apenasNotificados) {
+            ordenados = ordenados.filter(p => p.notif > 0);
+        }
+
+        if (ordenados.length === 0) {
+            container.innerHTML = `
+                <div style="text-align: center; color: #6c757d; font-size: 12px; padding: 10px;">
+                    Nenhum processo correspondente aos filtros ativos.
+                </div>`;
+            return;
+        }
+
+        let html = `
+            <table style="width:100%; border-collapse:collapse; text-align:left; font-size:11px; font-family:sans-serif;">
+                <thead>
+                    <tr style="background:#e9ecef; font-weight:bold; border-bottom:2px solid #dee2e6; position: sticky; top: 0; z-index: 10;">
+                        <th style="padding:4px; width:40px; text-align:center;">Prio</th>
+                        <th style="padding:4px;">Processo (NPU)</th>
+                        <th style="padding:4px; width:80px; text-align:center;">Status</th>
+                        <th style="padding:4px; width:40px; text-align:center;">Notif</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        ordenados.forEach(p => {
+            let corPrio = "#64748b";
+            if (p.prioValor >= 1 && p.prioValor < 2) corPrio = "#ef4444";
+            else if (p.prioValor >= 2 && p.prioValor < 3) corPrio = "#f97316";
+            else if (p.prioValor >= 3 && p.prioValor < 4) corPrio = "#eab308; color:#000;";
+            else if (p.prioValor >= 4 && p.prioValor < 5) corPrio = "#3b82f6";
+            else if (p.prioValor >= 5 && p.prioValor < 6) corPrio = "#a855f7";
+            else if (p.prioValor >= 6 && p.prioValor < 7) corPrio = "#10b981";
+            else if (p.prioValor >= 7 && p.prioValor < 8) corPrio = "#6366f1";
+            else if (p.prioValor >= 8 && p.prioValor < 9) corPrio = "#ec4899";
+            else if (p.prioValor >= 9 && p.prioValor < 10) corPrio = "#64748b";
+
+            const tagEstilo = `display:inline-block; padding:1px 4px; font-weight:bold; font-size:9px; color:#fff; border-radius:3px; background:${corPrio};`;
+
+            // O NPU vira um link interno limpo
+            const linkDisplay = `<a href="#" class="npu-link-click" data-chave="${p.chave}" data-pagina="${p.pagina}" title="Ir para este processo na Tabela do SIMAP (Pág ${p.pagina})" style="color:#0d6efd; font-weight:bold; text-decoration:underline; cursor:pointer;">${p.npu}</a>`;
+
+            // Botão de copiar o número limpo ao lado do processo
+            const botaoCopiar = `<button class="btn-copiar-npu" data-npu="${p.npu}" title="Copiar número do processo para colar no PJe" style="margin-left: 6px; padding: 1px 4px; font-size: 10px; cursor: pointer; border: 1px solid #ccc; background: #fff; border-radius: 3px; font-family: sans-serif; transition: background 0.15s;">📋</button>`;
+
+            let statusCor = "#6c757d";
+            if (p.status === "Finalizado") statusCor = "#157347";
+            else if (p.status === "Em andamento") statusCor = "#0d6efd";
+
+            html += `
+                <tr style="border-bottom:1px solid #dee2e6; background:#fff; height:24px;">
+                    <td style="padding:4px; text-align:center;"><span style="${tagEstilo}">P${p.prioridade}</span></td>
+                    <td style="padding:4px; word-break:break-all; display: flex; align-items: center;">${linkDisplay} ${botaoCopiar}</td>
+                    <td style="padding:4px; text-align:center; color:${statusCor}; font-weight:bold;">${p.status}</td>
+                    <td style="padding:4px; text-align:center;">${p.notif > 0 ? `<span style="color:#dc3545; font-weight:bold;">⚠️ ${p.notif}</span>` : '-'}</td>
+                </tr>
+            `;
+        });
+
+        html += `
+                </tbody>
+            </table>
+        `;
+        container.innerHTML = html;
+
+        // Ouvinte de clique para copiar NPU individual
+        container.querySelectorAll('.btn-copiar-npu').forEach(btn => {
+            btn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const npuText = btn.getAttribute('data-npu');
+                navigator.clipboard.writeText(npuText).then(() => {
+                    btn.innerText = "✅";
+                    btn.style.background = "#d4edda";
+                    setTimeout(() => {
+                        btn.innerText = "📋";
+                        btn.style.background = "#fff";
+                    }, 1200);
+                });
+            };
+        });
+
+        // Ouvinte de clique para focar o processo na tabela do SIMAP
+        container.querySelectorAll('.npu-link-click').forEach(link => {
+            link.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const chave = link.getAttribute('data-chave');
+                const pagina = parseInt(link.getAttribute('data-pagina'), 10);
+                focarProcessoNaTabela(chave, pagina);
+            };
+        });
     }
 
     function alternarPausaServidor() {
@@ -577,6 +935,8 @@ function extrairPrioridade(textoCelula) {
         }
 
         resetarContadoresPrioridade();
+        processosVarridos = [];
+        atualizarFilaTrabalhoPainel("Iniciando a varredura...");
 
         const firstBtn = document.querySelector('[aria-label="Primeira Página"]');
         if (firstBtn && !firstBtn.disabled && firstBtn.getAttribute('aria-disabled') !== 'true') {
@@ -588,6 +948,7 @@ function extrairPrioridade(textoCelula) {
         let finGeral = 0;
         let andGeral = 0;
         let notifGeral = 0;
+        let paginaAtual = 1;
         const processosMapeados = new Set();
         const regexValidaNPU = /\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}/;
 
@@ -599,10 +960,12 @@ function extrairPrioridade(textoCelula) {
             }
             if (abortarVarredura) break;
 
+            atualizarFilaTrabalhoPainel(`Varrendo processos da Página ${paginaAtual}...`);
+
             const linhas = document.querySelectorAll('tr[data-cy="entityTable"], tbody tr');
 
             linhas.forEach(linha => {
-                const textoLinha = linha.innerText.trim();
+                const textoLinha = childText(linha);
                 if (!textoLinha || textoLinha.includes("Nenhum registro encontrado")) return;
                 if (!regexValidaNPU.test(textoLinha)) return;
 
@@ -611,27 +974,28 @@ function extrairPrioridade(textoCelula) {
 
                 totalGeral++;
 
-                const livros = linha.querySelectorAll('i.pi.pi-book.text-red-500, i.pi-book.text-red-500');
+                const livros = inlinePiBooks(linha);
                 const qtdLivrosNaLinha = livros.length;
                 notifGeral += qtdLivrosNaLinha;
 
                 let isFin = false;
                 let isAnd = false;
-                const dp = linha.querySelector('p-dropdown, .p-dropdown');
+                let statusText = "Pendente";
+                const dp = inlineDropdownText(linha);
                 if (dp) {
-                    const label = dp.getAttribute('aria-label') || dp.querySelector('.p-dropdown-label')?.getAttribute('aria-label') || dp.querySelector('.p-dropdown-label')?.innerText?.trim();
-                    if (label) {
-                        if (label.includes("Finalizado")) { finGeral++; isFin = true; }
-                        else if (label.includes("Em andamento")) { andGeral++; isAnd = true; }
-                    }
+                    if (dp.includes("Finalizado")) { finGeral++; isFin = true; statusText = "Finalizado"; }
+                    else if (dp.includes("Em andamento")) { andGeral++; isAnd = true; statusText = "Em andamento"; }
                 }
 
                 const matchNPU = textoLinha.match(regexValidaNPU);
                 if (matchNPU) {
                     const chaveNpu = limparNPU(matchNPU[0]);
+                    const npuFormatado = matchNPU[0];
+                    let prioridadeIdentificada = null;
+
                     if (BANCO_PRIORIDADES.has(chaveNpu)) {
-                        const prioridadeStr = BANCO_PRIORIDADES.get(chaveNpu);
-                        const nivelPrioBase = parseInt(prioridadeStr, 10); // Agrupa 4.1 e 4.2 no contador 4
+                        prioridadeIdentificada = BANCO_PRIORIDADES.get(chaveNpu);
+                        const nivelPrioBase = parseInt(prioridadeIdentificada, 10); // Agrupa 4.1 e 4.2 no contador 4
 
                         if (nivelPrioBase >= 1 && nivelPrioBase <= 4) {
                             contadoresPrio[nivelPrioBase].total++;
@@ -640,6 +1004,18 @@ function extrairPrioridade(textoCelula) {
                             else if (isAnd) contadoresPrio[nivelPrioBase].and++;
                         }
                     }
+
+                    const parsedPrio = prioridadeIdentificada ? parseFloat(String(prioridadeIdentificada).replace(',', '.')) : 999;
+
+                    processosVarridos.push({
+                        npu: npuFormatado,
+                        chave: chaveNpu,
+                        prioridade: prioridadeIdentificada || "S/P",
+                        prioValor: parsedPrio,
+                        status: statusText,
+                        notif: qtdLivrosNaLinha,
+                        pagina: paginaAtual
+                    });
                 }
             });
 
@@ -649,12 +1025,38 @@ function extrairPrioridade(textoCelula) {
             if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true') break;
 
             nextBtn.click();
+            paginaAtual++;
             await esperar(1800);
         }
 
         varreduraAtiva = false;
         atualizarBotoesUI();
         atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, false);
+        atualizarFilaTrabalhoPainel();
+    }
+
+    function inlinePiBooks(linha) {
+        return inlinePiBooksSelector(linha);
+    }
+
+    function inlinePiBooksSelector(linha) {
+        return inlinePiBooksSelectorQ(linha);
+    }
+
+    // Corrigido para retornar a correspondência
+    function inlinePiBooksSelectorQ(linha) {
+        return linha.querySelectorAll('i.pi.pi-book.text-red-500, i.pi-book.text-red-500');
+    }
+
+    // Retorna o elemento dropdown correspondente
+    function inlineDropdown(linha) {
+        return linha.querySelector('p-dropdown, .p-dropdown');
+    }
+
+    function inlineDropdownText(linha) {
+        const dp = inlineDropdown(linha);
+        if (!dp) return null;
+        return dp.getAttribute('aria-label') || dp.querySelector('.p-dropdown-label')?.getAttribute('aria-label') || dp.querySelector('.p-dropdown-label')?.innerText?.trim();
     }
 
     function atualizarValoresPainel(total, fin, and, notif, processando) {
@@ -739,6 +1141,7 @@ function extrairPrioridade(textoCelula) {
         }
     }
 
+    // Torna o elemento arrastável na tela
     function tornarElementoArrastavel(elemento, gatilho) {
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
         if (gatilho) {
@@ -774,23 +1177,20 @@ function extrairPrioridade(textoCelula) {
         }
     }
 
-
-    // ==========================================
-    // PARTE 4: INICIALIZAÇÃO GERAL
-    // ==========================================
-
+    // Inicialização
     carregarDadosPlanilha();
 
-    const observer = new MutationObserver(() => {
-        aplicarTagsNaTela();
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    setInterval(() => {
-        aplicarTagsNaTela();
-        injetarMenuFlutuante();
+    // Injeta os controles e painel do servidor
+    setTimeout(() => {
         criarControlesServidor();
         criarPainelServidor();
-    }, 1200);
+    }, 1500);
+
+    // Observador DOM para aplicar tags de prioridade quando novos elementos surgirem
+    const observer = new MutationObserver((mutations) => {
+        aplicarTagsNaTela();
+        injetarMenuFlutuante();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
 
 })();
