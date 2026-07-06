@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Tontom-Simap (Servidor)
 // @namespace    simap-tjpe
-// @version      1.9
-// @description  Menu de observações, Prioridades, painel móvel com fila de trabalho consolidada, filtros de status, prioridades (P1 a P9) e notificações, botões de cópia individual e redirecionamento de foco por página.
+// @version      2.0
+// @description  Menu de observações, Prioridades, painel móvel com fila de trabalho consolidada, filtros, botões de cópia individual, sincronização em tempo real e redirecionamento de foco por página.
 // @match        https://simap.svc.tjpe.jus.br/*
 // @match        https://frontend.pje.cloud.tjpe.jus.br/*
 // @grant        GM_xmlhttpRequest
@@ -375,11 +375,11 @@
     }
 
     function criarControlesServidor() {
-        if (document.getElementById("tontomControlesServidor")) return;
+        if (document.getElementById("tontomControlesServidor")) return true;
 
         const ths = Array.from(document.querySelectorAll('th')).map(th => th.innerText.toUpperCase());
         const eTelaValida = ths.some(t => t.includes("PROCESSO") || t.includes("STATUS") || t.includes("NPU"));
-        if (!eTelaValida) return;
+        if (!eTelaValida) return false;
 
         const container = document.createElement("div");
         container.id = "tontomControlesServidor";
@@ -407,6 +407,7 @@
         container.appendChild(btnCarregar);
         container.appendChild(btnPause);
         document.body.appendChild(container);
+        return true;
     }
 
     function criarPainelServidor() {
@@ -456,7 +457,7 @@
                 </table>
 
                 <div id="btnTogglePrioridades" style="cursor:pointer; text-align:center; background:#f1f3f5; margin-top:10px; padding:6px; border:1px solid #ced4da; border-radius:4px; font-size:12px; font-weight:bold; color:#495057; user-select:none;">
-                    ➕ Mostrar Detalhamento por Prioridades (P1 a P4)
+                    ➕ Detalhar Prioridades (P1-P4)
                 </div>
 
                 <div id="wrapperPrioridades" style="display: none; margin-top: 8px; border-top: 1px dotted #ccc; padding-top: 8px;">
@@ -496,7 +497,7 @@
                 <!-- Seção da Fila de Trabalho Consolidada com Filtros Dinâmicos -->
                 <div id="wrapperFilaTrabalho" style="margin-top: 12px; border-top: 1px dotted #ccc; padding-top: 8px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                        <span style="font-weight: bold; font-size: 13px; color: #495057;">📋 Meus processos </span>
+                        <span style="font-weight: bold; font-size: 13px; color: #495057;">📋 Meus Processos</span>
                     </div>
 
                     <!-- Linha com os Seletores de Filtros -->
@@ -556,10 +557,10 @@
         btnTogglePrio.onclick = function() {
             if (wrapperPrio.style.display === 'none') {
                 wrapperPrio.style.display = 'block';
-                this.innerText = '🔽 Recolher Detalhamento';
+                this.innerText = '🔽 Recolher Detalhamento por Prioridades';
             } else {
                 wrapperPrio.style.display = 'none';
-                this.innerText = '➕ Contadores por Prioridades (P1-P4)';
+                this.innerText = '➕ Mostrar Detalhamento por Prioridades (P1 a P4)';
             }
         };
 
@@ -594,33 +595,41 @@
 
     // Função auxiliar para identificar a página ativa no paginador do PrimeNG ou PrimeFaces
     function obterPaginaAtual() {
-        const paginadorAtivo = document.querySelector('.p-paginator-page.p-highlight, button.p-paginator-page.p-highlight, .ui-state-active, .p-highlight');
-        if (paginadorAtivo) {
-            const parsed = parseInt(paginadorAtivo.innerText.trim(), 10);
-            if (!isNaN(parsed)) return parsed;
+        const paginatorContainer = document.querySelector('.p-paginator, .ui-paginator');
+        if (paginatorContainer) {
+            const paginadorAtivo = paginatorContainer.querySelector('.p-highlight, .ui-state-active');
+            if (paginadorAtivo) {
+                const parsed = parseInt(paginadorAtivo.innerText.trim(), 10);
+                if (!isNaN(parsed)) return parsed;
+            }
         }
         return 1;
     }
 
-    // Função para alterar a página do SIMAP de maneira assíncrona e extremamente robusta
+      // Função para alterar a página do SIMAP de maneira assíncrona e extremamente robusta
     async function irParaPagina(numeroPagina) {
         let paginaAtual = obterPaginaAtual();
         if (paginaAtual === numeroPagina) return true;
 
-        // 1. Tenta achar o botão direto pelo número da página
-        let botaoAlvo = document.querySelector(`[aria-label="Page ${numeroPagina}"], [aria-label="Página ${numeroPagina}"], [aria-label="page ${numeroPagina}"]`);
+        // 1. Tenta achar o botão direto pelo número da página, restringindo ao paginador para evitar falsos positivos
+        const paginatorContainer = document.querySelector('.p-paginator, .ui-paginator');
+        let botaoAlvo = null;
+        if (paginatorContainer) {
+            botaoAlvo = paginatorContainer.querySelector(`[aria-label="Page ${numeroPagina}"], [aria-label="Página ${numeroPagina}"], [aria-label="page ${numeroPagina}"]`);
 
-        if (!botaoAlvo) {
-            const botoesAria = Array.from(document.querySelectorAll('[aria-label*="Page"], [aria-label*="Página"], [aria-label*="page"]'));
-            botaoAlvo = botoesAria.find(b => {
-                const label = b.getAttribute('aria-label') || "";
-                return label.includes(String(numeroPagina));
-            });
-        }
+            if (!botaoAlvo) {
+                const botoesAria = Array.from(paginatorContainer.querySelectorAll('[aria-label*="Page"], [aria-label*="Página"], [aria-label*="page"]'));
+                botaoAlvo = botoesAria.find(b => {
+                    const label = b.getAttribute('aria-label') || "";
+                    const match = label.match(/\d+/);
+                    return match ? match[0] === String(numeroPagina) : false;
+                });
+            }
 
-        if (!botaoAlvo) {
-            const botoes = Array.from(document.querySelectorAll('.p-paginator-page, .p-paginator-pages button, button.p-link, .ui-paginator-page'));
-            botaoAlvo = botoes.find(b => b.innerText.trim() === String(numeroPagina));
+            if (!botaoAlvo) {
+                const botoes = Array.from(paginatorContainer.querySelectorAll('.p-paginator-page, button.p-link, .ui-paginator-page, button'));
+                botaoAlvo = botoes.find(b => b.innerText.trim() === String(numeroPagina));
+            }
         }
 
         if (botaoAlvo) {
@@ -628,7 +637,7 @@
         } else {
             // 2. Se não achou o botão direto, faz navegação estratégica / passo a passo
             if (numeroPagina === 1) {
-                const firstBtn = document.querySelector('[aria-label="Primeira Página"], [aria-label="First Page"], .p-paginator-first, .ui-paginator-first');
+                const firstBtn = document.querySelector('.p-paginator-first, .ui-paginator-first, [aria-label="Primeira Página"], [aria-label="First Page"]');
                 if (firstBtn && !firstBtn.disabled && firstBtn.getAttribute('aria-disabled') !== 'true') {
                     firstBtn.click();
                 } else {
@@ -636,11 +645,11 @@
                 }
             } else if (numeroPagina < paginaAtual) {
                 // Tenta ir para a primeira página primeiro se a distância for maior que 1 para acelerar
-                const firstBtn = document.querySelector('[aria-label="Primeira Página"], [aria-label="First Page"], .p-paginator-first, .ui-paginator-first');
+                const firstBtn = document.querySelector('.p-paginator-first, .ui-paginator-first, [aria-label="Primeira Página"], [aria-label="First Page"]');
                 if (firstBtn && !firstBtn.disabled && firstBtn.getAttribute('aria-disabled') !== 'true' && (paginaAtual - numeroPagina) > 1) {
                     firstBtn.click();
                 } else {
-                    const prevBtn = document.querySelector('[aria-label="Página Anterior"], [aria-label="Previous Page"], .p-paginator-prev, .ui-paginator-prev');
+                    const prevBtn = document.querySelector('.p-paginator-prev, .ui-paginator-prev, [aria-label="Página Anterior"], [aria-label="Previous Page"]');
                     if (prevBtn && !prevBtn.disabled && prevBtn.getAttribute('aria-disabled') !== 'true') {
                         prevBtn.click();
                     } else {
@@ -648,7 +657,7 @@
                     }
                 }
             } else {
-                const nextBtn = document.querySelector('[aria-label="Página Seguinte"], [aria-label="Next Page"], .p-paginator-next, .ui-paginator-next');
+                const nextBtn = document.querySelector('.p-paginator-next, .ui-paginator-next, [aria-label="Página Seguinte"], [aria-label="Next Page"]');
                 if (nextBtn && !nextBtn.disabled && nextBtn.getAttribute('aria-disabled') !== 'true') {
                     nextBtn.click();
                 } else {
@@ -695,9 +704,9 @@
 
         let linhaAlvo = null;
         linhas.forEach(linha => {
-            const texto = inlineDropdownText(linha) ? "" : (linha.innerText ? linha.innerText.trim() : "");
+            if (!linha.innerText) return;
             // Procura todas as ocorrências de NPU na linha e verifica qual corresponde à chave
-            const matches = linha.innerText ? linha.innerText.match(/\b\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}\b/g) : null;
+            const matches = linha.innerText.match(/\b\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}\b/g);
             if (matches) {
                 for (const match of matches) {
                     if (limparNPU(match) === chaveNpu) {
@@ -727,6 +736,81 @@
         } else {
             alert(`Processo encontrado na página ${numeroPagina}, mas a linha correspondente na tabela não pôde ser carregada. Tente rolar a tabela manualmente.`);
         }
+    }
+    // Sincroniza em tempo real as alterações feitas pelo usuário na página atual, sem precisar re-varrer
+    function atualizarDadosPaginaAtual() {
+        if (processosVarridos.length === 0) return; // Só roda se a varredura inicial já ocorreu
+
+        const regexValidaNPU = /\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}/;
+        const seletorLinhas = 'tr[data-cy="entityTable"], tbody tr';
+        const linhas = Array.from(document.querySelectorAll(seletorLinhas))
+                            .filter(linha => !linha.closest('#painelContadoresServidor'));
+
+        let houveAlteracao = false;
+
+        linhas.forEach(linha => {
+            if (!linha.innerText) return;
+            const matchNPU = linha.innerText.match(regexValidaNPU);
+            if (matchNPU) {
+                const chaveNpu = limparNPU(matchNPU[0]);
+                const processo = processosVarridos.find(p => p.chave === chaveNpu);
+
+                if (processo) {
+                    // 1. Extrai o Status do DOM
+                    let statusText = "Pendente";
+                    const dp = inlineDropdownText(linha);
+                    if (dp) {
+                        if (dp.includes("Finalizado")) statusText = "Finalizado";
+                        else if (dp.includes("Em andamento")) statusText = "Em andamento";
+                    }
+
+                    // 2. Extrai a quantidade de notificações do DOM
+                    const livros = inlinePiBooks(linha);
+                    const qtdLivros = livros.length;
+
+                    // 3. Compara com os dados guardados
+                    if (processo.status !== statusText || processo.notif !== qtdLivros) {
+                        processo.status = statusText;
+                        processo.notif = qtdLivros;
+                        houveAlteracao = true;
+                    }
+                }
+            }
+        });
+
+        if (houveAlteracao) {
+            recalcularContadoresGlobais();
+            atualizarFilaTrabalhoPainel();
+        }
+    }
+
+    // Recalcula e redesenha o painel geral de contadores
+    function recalcularContadoresGlobais() {
+        let totalGeral = processosVarridos.length;
+        let finGeral = 0;
+        let andGeral = 0;
+        let notifGeral = 0;
+
+        resetarContadoresPrioridade();
+
+        processosVarridos.forEach(p => {
+            if (p.status === "Finalizado") finGeral++;
+            else if (p.status === "Em andamento") andGeral++;
+
+            notifGeral += p.notif;
+
+            if (p.prioridade !== "S/P") {
+                const nivelPrioBase = parseInt(p.prioridade, 10);
+                if (nivelPrioBase >= 1 && nivelPrioBase <= 4) {
+                    contadoresPrio[nivelPrioBase].total++;
+                    contadoresPrio[nivelPrioBase].notif += p.notif;
+                    if (p.status === "Finalizado") contadoresPrio[nivelPrioBase].fin++;
+                    else if (p.status === "Em andamento") contadoresPrio[nivelPrioBase].and++;
+                }
+            }
+        });
+
+        atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, false);
     }
 
     // Atualiza a visualização da fila de trabalho com botões de ação corretos e filtros dinâmicos
@@ -880,6 +964,7 @@
         atualizarBotoesUI();
     }
 
+    // Atualiza o estado visual dos botões no painel superior
     function atualizarBotoesUI() {
         const btnCarregar = document.getElementById("btnGerarContadores");
         const btnPause = document.getElementById("btnServidorPause");
@@ -938,7 +1023,7 @@
         processosVarridos = [];
         atualizarFilaTrabalhoPainel("Iniciando a varredura...");
 
-        const firstBtn = document.querySelector('[aria-label="Primeira Página"]');
+        const firstBtn = document.querySelector('.p-paginator-first, .ui-paginator-first, [aria-label="Primeira Página"], [aria-label="First Page"]');
         if (firstBtn && !firstBtn.disabled && firstBtn.getAttribute('aria-disabled') !== 'true') {
             firstBtn.click();
             await esperar(1800);
@@ -1021,7 +1106,7 @@
 
             atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, true);
 
-            const nextBtn = document.querySelector('[aria-label="Página Seguinte"]');
+            const nextBtn = document.querySelector('.p-paginator-next, .ui-paginator-next, [aria-label="Página Seguinte"], [aria-label="Next Page"]');
             if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true') break;
 
             nextBtn.click();
@@ -1036,15 +1121,6 @@
     }
 
     function inlinePiBooks(linha) {
-        return inlinePiBooksSelector(linha);
-    }
-
-    function inlinePiBooksSelector(linha) {
-        return inlinePiBooksSelectorQ(linha);
-    }
-
-    // Corrigido para retornar a correspondência
-    function inlinePiBooksSelectorQ(linha) {
         return linha.querySelectorAll('i.pi.pi-book.text-red-500, i.pi-book.text-red-500');
     }
 
@@ -1126,7 +1202,7 @@
             } else {
                 // Lote acima está limpo OU apenas em andamento (com pendência de prazo/sistema), liberando a linha atual!
                 if (pData.fin === pData.total) {
-                    elAlerta.innerText = (i === 1) ? "✅ Lote 100% Concluído" : "✅ Concluído";
+                    elAlerta.innerText = (i === 1) ? "✅ 100% Finalizado" : "✅ 100% Finalizado";
                     elAlerta.style.color = "#157347";
                 } else if (pData.pen > 0) {
                     // Tem pendências brutas no lote atual
@@ -1180,16 +1256,28 @@
     // Inicialização
     carregarDadosPlanilha();
 
-    // Injeta os controles e painel do servidor
-    setTimeout(() => {
-        criarControlesServidor();
-        criarPainelServidor();
-    }, 1500);
+    // Tenta injetar os controles e painel do servidor de forma recorrente até que a página carregue a tabela
+    const intervalInicial = setInterval(() => {
+        if (criarControlesServidor()) {
+            criarPainelServidor();
+            clearInterval(intervalInicial);
+        }
+    }, 500);
 
-    // Observador DOM para aplicar tags de prioridade quando novos elementos surgirem
+    // Observador DOM para aplicar tags de prioridade, menu e monitorar atualizações em tempo real
     const observer = new MutationObserver((mutations) => {
+        // Ignora atualizações se a mutação ocorreu apenas dentro do nosso próprio painel ou menu flutuante
+        const apenasNossoPainel = mutations.every(m =>
+            m.target.closest('#painelContadoresServidor') ||
+            m.target.closest('#containerMenuTontom') ||
+            m.target.closest('#tontomControlesServidor')
+        );
+        if (apenasNossoPainel) return;
+
+        criarControlesServidor();
         aplicarTagsNaTela();
         injetarMenuFlutuante();
+        atualizarDadosPaginaAtual();
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
