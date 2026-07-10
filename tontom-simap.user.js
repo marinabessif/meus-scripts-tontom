@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tontom-Simap (Servidor)
 // @namespace    simap-tjpe
-// @version      2.0
+// @version      2.1
 // @description  Menu de observações, Prioridades, painel móvel com fila de trabalho consolidada, filtros, botões de cópia individual, sincronização em tempo real e redirecionamento de foco por página.
 // @match        https://simap.svc.tjpe.jus.br/*
 // @match        https://frontend.pje.cloud.tjpe.jus.br/*
@@ -9,8 +9,8 @@
 // @grant        GM_addStyle
 // @connect      docs.google.com
 // @run-at       document-end
-// @downloadURL https://update.greasyfork.org/scripts/580884/Tontom-Simap%20%28Servidor%29.user.js
-// @updateURL https://update.greasyfork.org/scripts/580884/Tontom-Simap%20%28Servidor%29.meta.js
+// @downloadURL https://update.greasyfork.org/scripts/586485/Tontom-Simap%20%28Servidor%29.user.js
+// @updateURL https://update.greasyfork.org/scripts/586485/Tontom-Simap%20%28Servidor%29.meta.js
 // ==/UserScript==
 
 (function() {
@@ -35,7 +35,7 @@
     // PARTE 1: LÓGICA DAS TAGS DE PRIORIDADE
     // ==========================================
 
-    const URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1v4cbLicC3ilOx-cS7PP9pV82y4H6jcS_QsNn32Jcz3s/edit?gid=0#gid=0";
+    const URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1RFS3XkGQ7Ga1NqCMXJmqYGcR-JBCXtYB7r51quVb0yE/edit?gid=1744875210";
 
     GM_addStyle(`
         .tag-prioridade {
@@ -112,13 +112,24 @@
 
     function extrairPrioridade(textoCelula) {
         if (!textoCelula) return null;
-        // Captura números com ou sem decimais (ex: 4, 4.1, 4.2)
-        const m = String(textoCelula).trim().match(/^(\d+(?:[.,]\d+)?)/);
-        if (!m) return null;
-        const valorStr = m[1].replace(',', '.'); // Padroniza para ponto
-        const base = parseInt(valorStr, 10);
-        // Retorna a string completa (ex: "4.1") se a base estiver entre 1 e 9
-        return (base >= 1 && base <= 9) ? valorStr : null;
+        const clean = String(textoCelula).trim();
+
+        // 1. Tenta número (com ou sem decimal) no início da célula (ex: "1", "1.1", "2 - (+20 dias)")
+        let m = clean.match(/^\s*(\d+(?:[.,]\d+)?)/);
+        if (m) {
+            const valorStr = m[1].replace(',', '.');
+            const base = parseInt(valorStr, 10);
+            if (base >= 1 && base <= 11) return valorStr;
+        }
+
+        // 2. Tenta padrões com prefixos comuns (ex: "P1", "P 1.1", "Origem 2", "Prioridade 4")
+        m = clean.match(/(?:P|p|Origem|Prioridade)\s*(\d+(?:[.,]\d+)?)/i);
+        if (m) {
+            const valorStr = m[1].replace(',', '.');
+            const base = parseInt(valorStr, 10);
+            if (base >= 1 && base <= 11) return valorStr;
+        }
+        return null;
     }
 
     function processarDadosPlanilha(linhasCsv) {
@@ -126,7 +137,7 @@
         let headerIdx = -1;
         for (let i = 0; i < Math.min(5, linhasCsv.length); i++) {
             const row = linhasCsv[i].map(h => String(h ?? "").toUpperCase().trim());
-            if (row.some(h => h === "NPU" || h.includes("PROCESSO"))) {
+            if (row.some(h => h === "NPU" || h.includes("PROCESSO") || h.includes("NUMERO"))) {
                 headerIdx = i;
                 break;
             }
@@ -134,12 +145,19 @@
         if (headerIdx < 0) headerIdx = 0;
         const header = linhasCsv[headerIdx].map(h => String(h ?? "").toUpperCase().trim());
         const dados = linhasCsv.slice(headerIdx + 1);
-        const idxNPU = header.findIndex(h => h.includes("PROCESSO") || h === "NPU");
-        const idxTipo = header.findIndex(h => h.includes("TIPO") && h.includes("ATEND"));
+        const idxNPU = header.findIndex(h => h === "NPU" || h.includes("PROCESSO") || h.includes("NUMERO"));
+        let idxTipo = header.findIndex(h => h === "ORIGEM" || h === "ORIGENS" || h.includes("TIPO") || h === "PRIORIDADE" || h === "PRIO");
+
+        if (idxTipo < 0) {
+            idxTipo = header.findIndex(h => h.includes("ORIGEM") || h.includes("PRIO"));
+        }
+        BANCO_PRIORIDADES.clear();
+
         dados.forEach(row => {
             const npuBruto = row[idxNPU >= 0 ? idxNPU : 0];
             const npuChave = limparNPU(npuBruto);
             if (npuChave.length !== 20) return;
+
             let prioridadeIdentificada = 1;
             if (idxTipo >= 0) {
                 prioridadeIdentificada = extrairPrioridade(row[idxTipo]) || 1;
@@ -172,6 +190,8 @@
     }
 
     function aplicarTagsNaTela() {
+        substituirIconeNotificacao();
+        ajustarNomesLayout();
         if (BANCO_PRIORIDADES.size === 0) return;
         const regexNPU = /\b\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}\b/g;
         const elementos = document.querySelectorAll("td, span, a, div.ui-outputpanel");
@@ -215,23 +235,24 @@
     // ==========================================
 
     const opcoesPadrao = [
-        { texto: "DÚVIDA (campo aberto)", precisaExtra: true, labelExtra: "Digite a dúvida:" },
-        { texto: "SUPERVISÃO (campo aberto)", precisaExtra: true, labelExtra: "Digite o motivo da supervisão:" },
-        { texto: "SISCONDJ (Alvará gravado OU Vinculação de Conta)", precisaExtra: false },
-        { texto: "PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
-        { texto: "PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação:" },
-        { texto: "PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
-        { texto: "PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", precisaExtra: true, labelExtra: "Informe o Nº do processo:" },
-        { texto: "ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", precisaExtra: true, labelExtra: "Informe a Data ou Motivo:" },
-        { texto: "ERRO DE FLUXO (Nº do Chamado)", precisaExtra: true, labelExtra: "Informe o Nº do Chamado:" },
-        { texto: "LEILÃO", precisaExtra: false },
-        { texto: "REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
-        { texto: "PRECATÓRIO/RPV", precisaExtra: false },
-        { texto: "CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", precisaExtra: false },
-        { texto: "INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false }
+        { display: "SUPERVISÃO/DÚVIDA (campo aberto)", prefixo: "SUPERVISÃO/DÚVIDA", precisaExtra: true, labelExtra: "Digite o motivo ou a dúvida:", rotuloExtra: "Detalhe" },
+        { display: "*SERVIDOR (campo aberto)", prefixo: "*SERVIDOR", precisaExtra: true, labelExtra: "Digite o lembrete/observação interna:", rotuloExtra: "Lembrete" },
+        { display: "*SISCONDJ (Alvará gravado)", prefixo: "*SISCONDJ (Alvará gravado)", precisaExtra: false },
+        { display: "*SISCONDJ (Vinculação de Conta)", prefixo: "*SISCONDJ (Vinculação de Conta)", precisaExtra: false },
+        { display: "*PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", prefixo: "*PRAZO ABERTO FORA DO SISTEMA", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PRAZO EM CURSO NO SISTEMA", prefixo: "*PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
+        { display: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", prefixo: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação Conexa:", rotuloExtra: "Nº" },
+        { display: "*PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", prefixo: "*PROCESSO SUSPENSO (Determinação judicial)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PROCESSO SUSPENSO (Data de Retorno)", prefixo: "*PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", prefixo: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
+        { display: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", prefixo: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência)", precisaExtra: true, labelExtra: "Informe o Nº do processo:", rotuloExtra: "Nº" },
+        { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
+        { display: "*ERRO DE FLUXO (Nº do Chamado)", prefixo: "*ERRO DE FLUXO", precisaExtra: true, labelExtra: "Informe o Nº do Chamado:", rotuloExtra: "Chamado" },
+        { display: "*LEILÃO", prefixo: "*LEILÃO", precisaExtra: false },
+        { display: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", prefixo: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
+        { display: "*PRECATÓRIO/RPV", prefixo: "*PRECATÓRIO/RPV", precisaExtra: false },
+        { display: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", prefixo: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", precisaExtra: false },
+        { display: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", prefixo: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false }
     ];
 
     let textoPrevioAoSelect = "";
@@ -239,6 +260,19 @@
     function injetarMenuFlutuante() {
         const txtAreaOriginal = document.getElementById('field_observacao');
         if (!txtAreaOriginal || document.getElementById('containerMenuTontom')) return;
+
+        // Detecta se a servidora Thamyris Ferreira Santos está logada
+        const docText = document.body.innerText || "";
+        const isThamyris = docText.includes("THAMYRIS FERREIRA") || docText.includes("Thamyris Ferreira") || docText.includes("thamyris ferreira");
+
+        let opcoesMenu = [...opcoesPadrao];
+        if (isThamyris) {
+            opcoesMenu.push({
+                display: "*IMPEDIMENTO DO CUMPRIMENTO (selecionar tipo)",
+                prefixo: "*IMPEDIMENTO DO CUMPRIMENTO",
+                precisaImpedimento: true
+            });
+        }
 
         const container = document.createElement('div');
         container.id = 'containerMenuTontom';
@@ -258,14 +292,15 @@
         optDefault.innerText = '-- Escolha uma opção (Opcional) --';
         select.appendChild(optDefault);
 
-        opcoesPadrao.forEach((opt, index) => {
+        opcoesMenu.forEach((opt, index) => {
             const o = document.createElement('option');
             o.value = index;
-            o.innerText = opt.texto;
+            o.innerText = opt.display;
             select.appendChild(o);
         });
         container.appendChild(select);
 
+        // Div de texto extra (ex: chamados, datas)
         const divExtra = document.createElement('div');
         divExtra.id = 'divExtraTontom';
         divExtra.style.cssText = 'display: none; margin-top: 8px;';
@@ -283,42 +318,88 @@
         divExtra.appendChild(inputExtra);
         container.appendChild(divExtra);
 
+        // Div extra de Impedimento (Exclusivo Thamyris)
+        const divImpedimento = document.createElement('div');
+        divImpedimento.id = 'divImpedimentoTontom';
+        divImpedimento.style.cssText = 'display: none; margin-top: 8px;';
+
+        const labelImp = document.createElement('label');
+        labelImp.innerText = 'Selecione o tipo de Impedimento:';
+        labelImp.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
+
+        const selectImp = document.createElement('select');
+        selectImp.id = 'selectImpedimentoTontom';
+        selectImp.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; background-color: #fff; cursor: pointer;';
+
+        const impedimentos = ["-- Selecione o Impedimento --", "ALVARÁ", "SICAJUD", "MALOTE", "MANDADO", "OUTROS"];
+        impedimentos.forEach(imp => {
+            const opt = document.createElement('option');
+            opt.value = imp.startsWith("--") ? "" : imp;
+            opt.innerText = imp;
+            selectImp.appendChild(opt);
+        });
+
+        divImpedimento.appendChild(labelImp);
+        divImpedimento.appendChild(selectImp);
+        container.appendChild(divImpedimento);
         txtAreaOriginal.parentNode.insertBefore(container, txtAreaOriginal);
 
+        // Lógica de seleção do menu padronizado
         select.addEventListener('change', function() {
             const idx = this.value;
             if (idx === '') {
                 divExtra.style.display = 'none';
                 inputExtra.value = '';
+                divImpedimento.style.display = 'none';
+                selectImp.value = '';
                 return;
             }
 
-            const opcaoSelecionada = opcoesPadrao[idx];
+            const opcaoSelecionada = opcoesMenu[idx];
             textoPrevioAoSelect = txtAreaOriginal.value.trim();
 
-            if (opcaoSelecionada.precisaExtra) {
+            // Lógica do Impedimento (Thamyris)
+            if (opcaoSelecionada.precisaImpedimento) {
+                divExtra.style.display = 'none';
+                inputExtra.value = '';
+                divImpedimento.style.display = 'block';
+                selectImp.value = '';
+                selectImp.focus();
+
+                acumularTextoOficial(opcaoSelecionada.prefixo);
+            }
+            // Lógica do Campo Aberto (Normal)
+            else if (opcaoSelecionada.precisaExtra) {
+                divImpedimento.style.display = 'none';
+                selectImp.value = '';
                 labelExtra.innerText = opcaoSelecionada.labelExtra;
                 divExtra.style.display = 'block';
                 inputExtra.value = '';
                 inputExtra.focus();
 
-                acumularTextoOficial(opcaoSelecionada.texto);
-            } else {
+                acumularTextoOficial(opcaoSelecionada.prefixo);
+            }
+            // Opções Simples
+            else {
+                divImpedimento.style.display = 'none';
+                selectImp.value = '';
                 divExtra.style.display = 'none';
                 inputExtra.value = '';
 
-                acumularTextoOficial(opcaoSelecionada.texto);
+                const textoFinal = opcaoSelecionada.cleanText || opcaoSelecionada.prefixo;
+                acumularTextoOficial(textoFinal);
                 select.value = '';
             }
         });
 
+        // Lógica do campo aberto texto
         inputExtra.addEventListener('input', function() {
             const idx = select.value;
             if (idx === '') return;
 
-            const opcaoSelecionada = opcoesPadrao[idx];
+            const opcaoSelecionada = opcoesMenu[idx];
             const infoAdicional = this.value.trim();
-            const textoTermo = infoAdicional ? `${opcaoSelecionada.texto} - ${infoAdicional}` : opcaoSelecionada.texto;
+            const textoTermo = infoAdicional ? `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${infoAdicional}` : opcaoSelecionada.prefixo;
 
             substituirTextoTemporario(textoTermo);
         });
@@ -332,6 +413,22 @@
                 txtAreaOriginal.focus();
             }
         });
+
+        // Lógica de seleção do sub-impedimento (Thamyris)
+        selectImp.addEventListener('change', function() {
+            const val = this.value;
+            if (!val) return;
+
+            const opcaoSelecionada = opcoesMenu[select.value];
+            const textoFinal = `${opcaoSelecionada.prefixo} | Motivo: ${val}`;
+            substituirTextoTemporario(textoFinal);
+
+            // Conclui a seleção
+            select.value = '';
+            divImpedimento.style.display = 'none';
+            txtAreaOriginal.focus();
+        });
+
     }
 
     function acumularTextoOficial(novoTexto) {
@@ -422,6 +519,14 @@
             display:none; font-family: sans-serif;
         `;
         document.body.appendChild(div);
+
+        // Inicializa com a última posição salva (antes de chamar tornarElementoArrastavel)
+        const salvoTop = localStorage.getItem('painelContadoresServidor_top');
+        const salvoLeft = localStorage.getItem('painelContadoresServidor_left');
+        if (salvoTop && salvoLeft) {
+            div.style.top = salvoTop;
+            div.style.left = salvoLeft;
+        }
     }
 
     function renderizarEstruturaPainel() {
@@ -444,7 +549,7 @@
                         <th style="width: 105px; color: #0d6efd;">Em andamento</th>
                         <th style="width: 90px; color: #b02a37;">Pendentes</th>
                         <th style="width: 70px;">% Fin.</th>
-                        <th style="width: 110px; color: #dc3545;">⚠️ Notificação</th>
+                        <th style="width: 100px; color: #dc3545;">⚠️ Notificação</th>
                     </tr>
                     <tr>
                         <td id="srv-total" style="font-weight: bold; padding: 6px;">-</td>
@@ -457,7 +562,7 @@
                 </table>
 
                 <div id="btnTogglePrioridades" style="cursor:pointer; text-align:center; background:#f1f3f5; margin-top:10px; padding:6px; border:1px solid #ced4da; border-radius:4px; font-size:12px; font-weight:bold; color:#495057; user-select:none;">
-                    ➕ Detalhar Prioridades (P1-P4)
+                    ➕ Mostrar Detalhamento por Prioridades (P1 a P4)
                 </div>
 
                 <div id="wrapperPrioridades" style="display: none; margin-top: 8px; border-top: 1px dotted #ccc; padding-top: 8px;">
@@ -468,8 +573,8 @@
                             <th style="width: 50px; color: #157347;">Fin</th>
                             <th style="width: 60px; color: #0d6efd;">Andam</th>
                             <th style="width: 50px; color: #b02a37;">Pend</th>
-                            <th style="width: 45px; color: #dc3545;"> Notif</th>
-                            <th style="width: 300px; color: #d63384; text-align: left; padding-left: 6px;">Alerta </th>
+                            <th style="width: 45px; color: #dc3545;">⚠️ Notif</th>
+                            <th style="width: 250px; color: #d63384; text-align: left; padding-left: 6px;">Situação</th>
                         </tr>
                         <tr id="row-p1">
                             <td style="font-weight:bold; background:#ffe3e3; color:#b02a37;">P1</td>
@@ -523,7 +628,7 @@
                             <option value="S/P">Prioridade: Sem Prio (S/P)</option>
                         </select>
                         <button id="btnFiltroNotif" data-ativo="false" style="flex: 1; padding: 3px 6px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; color: #495057; font-weight: bold; cursor: pointer; height: 26px; transition: all 0.2s; white-space: nowrap;">
-                            ⚠️ Apenas com Notificação
+                            ⚠️ Apenas Notificados
                         </button>
                     </div>
 
@@ -606,7 +711,7 @@
         return 1;
     }
 
-      // Função para alterar a página do SIMAP de maneira assíncrona e extremamente robusta
+    // Função para alterar a página do SIMAP de maneira assíncrona e extremamente robusta
     async function irParaPagina(numeroPagina) {
         let paginaAtual = obterPaginaAtual();
         if (paginaAtual === numeroPagina) return true;
@@ -697,6 +802,35 @@
             }
         }
 
+        // Garante que o CSS de foco está injetado no cabeçalho
+        if (!document.getElementById('tontomFocoEstilo')) {
+            const style = document.createElement('style');
+            style.id = 'tontomFocoEstilo';
+            style.textContent = `
+                .tontom-linha-focada td {
+                    animation: tontomPulseFoco 2s infinite ease-in-out !important;
+                }
+                @keyframes tontomPulseFoco {
+                    0% { background-color: rgba(13, 110, 253, 0.05); }
+                    50% { background-color: rgba(13, 110, 253, 0.16); }
+                    100% { background-color: rgba(13, 110, 253, 0.05); }
+                }
+                @keyframes tontomBadgePulse {
+                    from { transform: scale(1); box-shadow: 0 0 2px rgba(13,110,253,0.3); }
+                    to { transform: scale(1.05); box-shadow: 0 0 6px rgba(13,110,253,0.7); }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        // Limpa focos antigos de outras linhas
+        document.querySelectorAll('.tontom-linha-focada').forEach(l => {
+            l.classList.remove('tontom-linha-focada');
+        });
+        document.querySelectorAll('.tontom-badge-foco').forEach(b => {
+            b.remove();
+        });
+
         // CRÍTICO: Exclui o próprio painel da busca para não focar a linha da Fila de Trabalho no painel!
         const seletorLinhas = 'tr[data-cy="entityTable"], tbody tr';
         const linhas = Array.from(document.querySelectorAll(seletorLinhas))
@@ -710,33 +844,50 @@
             if (matches) {
                 for (const match of matches) {
                     if (limparNPU(match) === chaveNpu) {
-                        linhaAlvo = linha;
+                        linhaAlvo = geometryRowRoot(linha);
                         break;
                     }
                 }
             }
         });
 
+        function geometryRowRoot(elem) {
+            // Garante que pegamos o elemento TR correspondente
+            return elem.tagName === 'TR' ? elem : elem.closest('tr') || elem;
+        }
+
         if (linhaAlvo) {
+            // Centraliza o processo focado na tela com scroll suave
             linhaAlvo.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-            const corOriginal = linhaAlvo.style.backgroundColor || '';
-            linhaAlvo.style.transition = 'background-color 0.3s';
-            linhaAlvo.style.backgroundColor = '#fff9db'; // Destaque amarelo suave
+            // Adiciona classe de foco persistente
+            linhaAlvo.classList.add('tontom-linha-focada');
 
-            setTimeout(() => {
-                linhaAlvo.style.backgroundColor = corOriginal;
-                setTimeout(() => {
-                    linhaAlvo.style.backgroundColor = '#fff9db';
-                    setTimeout(() => {
-                        linhaAlvo.style.backgroundColor = corOriginal;
-                    }, 800);
-                }, 400);
-            }, 1200);
+            // Injeta o badge visual "📍"
+            const cells = Array.from(linhaAlvo.querySelectorAll('td'));
+            const cellNpu = cells.find(td => /\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}/.test(td.innerText));
+            if (cellNpu) {
+                const badge = document.createElement('span');
+                badge.className = 'tontom-badge-foco';
+                badge.innerHTML = '📍';
+                badge.title = 'Processo focado. Clique neste selo para remover o destaque.';
+                badge.style.cssText = 'display: inline-block; padding: 2px 6px; background: #0d6efd; color: #fff; font-size: 10px; font-weight: bold; border-radius: 4px; margin-right: 8px; animation: tontomBadgePulse 1s infinite alternate; font-family: sans-serif; cursor: pointer; user-select: none; vertical-align: middle;';
+
+                badge.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    linhaAlvo.classList.remove('tontom-linha-focada');
+                    badge.remove();
+                };
+
+                cellNpu.insertBefore(badge, cellNpu.firstChild);
+            }
+
         } else {
             alert(`Processo encontrado na página ${numeroPagina}, mas a linha correspondente na tabela não pôde ser carregada. Tente rolar a tabela manualmente.`);
         }
     }
+
     // Sincroniza em tempo real as alterações feitas pelo usuário na página atual, sem precisar re-varrer
     function atualizarDadosPaginaAtual() {
         if (processosVarridos.length === 0) return; // Só roda se a varredura inicial já ocorreu
@@ -744,7 +895,7 @@
         const regexValidaNPU = /\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}/;
         const seletorLinhas = 'tr[data-cy="entityTable"], tbody tr';
         const linhas = Array.from(document.querySelectorAll(seletorLinhas))
-                            .filter(linha => !linha.closest('#painelContadoresServidor'));
+                            .filter(linha => !linha.closest('#painelContadoresServidor') && !linha.closest('#tontomControlesServidor'));
 
         let houveAlteracao = false;
 
@@ -764,7 +915,7 @@
                         else if (dp.includes("Em andamento")) statusText = "Em andamento";
                     }
 
-                    // 2. Extrai a quantidade de notificações do DOM
+                    // 2. Extrai a quantidade de notificações nativas (livros) do DOM
                     const livros = inlinePiBooks(linha);
                     const qtdLivros = livros.length;
 
@@ -964,7 +1115,6 @@
         atualizarBotoesUI();
     }
 
-    // Atualiza o estado visual dos botões no painel superior
     function atualizarBotoesUI() {
         const btnCarregar = document.getElementById("btnGerarContadores");
         const btnPause = document.getElementById("btnServidorPause");
@@ -1120,8 +1270,32 @@
         atualizarFilaTrabalhoPainel();
     }
 
+    function substituirIconeNotificacao() {
+        const livros = document.querySelectorAll('i.pi-book.text-red-500, i.pi.pi-book.text-red-500');
+        livros.forEach(el => {
+            el.classList.remove('pi-book', 'text-red-500');
+            el.classList.add('pi', 'pi-exclamation-triangle', 'tontom-notif-replaced');
+            el.style.color = '#eab308';
+        });
+    }
+
+    // Função para alterar layout nativo do SIMAP (Trocar "SITUAÇÃO DO LOTE" por "SITUAÇÃO")
+    function ajustarNomesLayout() {
+        const targets = document.querySelectorAll("th, td, span, label, div.ui-outputpanel");
+        targets.forEach(el => {
+            if (el.closest('#painelContadoresServidor') || el.closest('#containerMenuTontom') || el.closest('#tontomControlesServidor')) return;
+            for (let node of el.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    if (node.nodeValue.toUpperCase().includes("SITUAÇÃO DO LOTE")) {
+                        node.nodeValue = node.nodeValue.replace(/SITUAÇÃO DO LOTE/gi, "SITUAÇÃO");
+                    }
+                }
+            }
+        });
+    }
+
     function inlinePiBooks(linha) {
-        return linha.querySelectorAll('i.pi.pi-book.text-red-500, i.pi-book.text-red-500');
+        return linha.querySelectorAll('i.pi.pi-book.text-red-500, i.pi-book.text-red-500, i.tontom-notif-replaced');
     }
 
     // Retorna o elemento dropdown correspondente
@@ -1202,7 +1376,7 @@
             } else {
                 // Lote acima está limpo OU apenas em andamento (com pendência de prazo/sistema), liberando a linha atual!
                 if (pData.fin === pData.total) {
-                    elAlerta.innerText = (i === 1) ? "✅ 100% Finalizado" : "✅ 100% Finalizado";
+                    elAlerta.innerText = "✅ 100% FINALIZADO";
                     elAlerta.style.color = "#157347";
                 } else if (pData.pen > 0) {
                     // Tem pendências brutas no lote atual
@@ -1247,9 +1421,12 @@
             elemento.style.left = (elemento.offsetLeft - pos1) + "px";
         }
 
+        // Adiciona persistência de posição ao salvar as coordenadas no localStorage ao soltar o mouse
         function closeDragElement() {
             document.onmouseup = null;
             document.onmousemove = null;
+            localStorage.setItem('painelContadoresServidor_top', elemento.style.top);
+            localStorage.setItem('painelContadoresServidor_left', elemento.style.left);
         }
     }
 
