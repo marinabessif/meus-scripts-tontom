@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tontom-Simap (Servidor)
 // @namespace    simap-tjpe
-// @version      2.1
+// @version      2.2
 // @description  Menu de observações, Prioridades, painel móvel com fila de trabalho consolidada, filtros, botões de cópia individual, sincronização em tempo real e redirecionamento de foco por página.
 // @match        https://simap.svc.tjpe.jus.br/*
 // @match        https://frontend.pje.cloud.tjpe.jus.br/*
@@ -9,8 +9,8 @@
 // @grant        GM_addStyle
 // @connect      docs.google.com
 // @run-at       document-end
-// @downloadURL https://update.greasyfork.org/scripts/586485/Tontom-Simap%20%28Servidor%29.user.js
-// @updateURL https://update.greasyfork.org/scripts/586485/Tontom-Simap%20%28Servidor%29.meta.js
+// @downloadURL https://update.greasyfork.org/scripts/580884/Tontom-Simap%20%28Servidor%29.user.js
+// @updateURL https://update.greasyfork.org/scripts/580884/Tontom-Simap%20%28Servidor%29.meta.js
 // ==/UserScript==
 
 (function() {
@@ -113,7 +113,7 @@
     function extrairPrioridade(textoCelula) {
         if (!textoCelula) return null;
         const clean = String(textoCelula).trim();
-
+        
         // 1. Tenta número (com ou sem decimal) no início da célula (ex: "1", "1.1", "2 - (+20 dias)")
         let m = clean.match(/^\s*(\d+(?:[.,]\d+)?)/);
         if (m) {
@@ -121,7 +121,7 @@
             const base = parseInt(valorStr, 10);
             if (base >= 1 && base <= 11) return valorStr;
         }
-
+        
         // 2. Tenta padrões com prefixos comuns (ex: "P1", "P 1.1", "Origem 2", "Prioridade 4")
         m = clean.match(/(?:P|p|Origem|Prioridade)\s*(\d+(?:[.,]\d+)?)/i);
         if (m) {
@@ -147,7 +147,7 @@
         const dados = linhasCsv.slice(headerIdx + 1);
         const idxNPU = header.findIndex(h => h === "NPU" || h.includes("PROCESSO") || h.includes("NUMERO"));
         let idxTipo = header.findIndex(h => h === "ORIGEM" || h === "ORIGENS" || h.includes("TIPO") || h === "PRIORIDADE" || h === "PRIO");
-
+        
         if (idxTipo < 0) {
             idxTipo = header.findIndex(h => h.includes("ORIGEM") || h.includes("PRIO"));
         }
@@ -157,7 +157,7 @@
             const npuBruto = row[idxNPU >= 0 ? idxNPU : 0];
             const npuChave = limparNPU(npuBruto);
             if (npuChave.length !== 20) return;
-
+            
             let prioridadeIdentificada = 1;
             if (idxTipo >= 0) {
                 prioridadeIdentificada = extrairPrioridade(row[idxTipo]) || 1;
@@ -190,8 +190,6 @@
     }
 
     function aplicarTagsNaTela() {
-        substituirIconeNotificacao();
-        ajustarNomesLayout();
         if (BANCO_PRIORIDADES.size === 0) return;
         const regexNPU = /\b\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}\b/g;
         const elementos = document.querySelectorAll("td, span, a, div.ui-outputpanel");
@@ -230,6 +228,7 @@
         return el.innerText ? el.innerText.trim() : "";
     }
 
+    // ==========================================
     // ==========================================
     // PARTE 2: LÓGICA DO MENU DE OBSERVAÇÕES
     // ==========================================
@@ -344,6 +343,77 @@
         container.appendChild(divImpedimento);
         txtAreaOriginal.parentNode.insertBefore(container, txtAreaOriginal);
 
+        // --- Sincronização do Checkbox de Notificação (Tontom) ---
+        function obterCheckboxNotificar() {
+            const labels = Array.from(document.querySelectorAll('label, span, div'));
+            const labelNotif = labels.find(el => el.innerText && el.innerText.trim().includes('Notificar Supervisão/Servidor'));
+            if (labelNotif) {
+                const pCheckbox = labelNotif.closest('p-checkbox');
+                if (pCheckbox) {
+                    return pCheckbox.querySelector('input[type="checkbox"]') || pCheckbox;
+                }
+                const parent = labelNotif.parentElement;
+                if (parent) {
+                    return parent.querySelector('input[type="checkbox"]') || parent.querySelector('.p-checkbox-box') || parent;
+                }
+            }
+            return document.querySelector('p-checkbox input[type="checkbox"]') || document.querySelector('input[type="checkbox"]');
+        }
+
+        function isCheckboxChecked(chk) {
+            if (!chk) return false;
+            if (chk.tagName === 'INPUT') {
+                return chk.checked;
+            }
+            const box = chk.querySelector('.p-checkbox-box') || chk;
+            return box.classList.contains('p-highlight') || box.getAttribute('aria-checked') === 'true' || chk.checked;
+        }
+
+        function setCheckboxChecked(chk, state) {
+            if (!chk) return;
+            const input = chk.tagName === 'INPUT' ? chk : chk.querySelector('input[type="checkbox"]');
+            if (input) {
+                if (input.checked !== state) {
+                    input.click();
+                }
+            } else {
+                const box = chk.querySelector('.p-checkbox-box') || chk;
+                const isCurrentlyChecked = box.classList.contains('p-highlight') || box.getAttribute('aria-checked') === 'true';
+                if (isCurrentlyChecked !== state) {
+                    box.click();
+                }
+            }
+        }
+
+        // Inicialização: Se a observação já possui a tag [NOTIFICADO] salva no texto
+        setTimeout(() => {
+            const chk = obterCheckboxNotificar();
+            let texto = txtAreaOriginal.value;
+            if (texto.includes('[NOTIFICADO]')) {
+                setCheckboxChecked(chk, true);
+                txtAreaOriginal.value = texto.replace(/[\s]*\[NOTIFICADO\]/g, '').trim();
+                dispararEventos(txtAreaOriginal);
+            }
+        }, 400);
+
+        // Intercepta o clique no botão Salvar para embutir [NOTIFICADO] se marcado
+        const btnSalvar = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('Salvar') || btn.textContent.includes('Salvar'));
+        if (btnSalvar) {
+            btnSalvar.addEventListener('click', function(e) {
+                const chk = obterCheckboxNotificar();
+                const isChecked = isCheckboxChecked(chk);
+                let texto = txtAreaOriginal.value.trim();
+                
+                texto = texto.replace(/[\s]*\[NOTIFICADO\]/g, '').trim();
+                if (isChecked) {
+                    txtAreaOriginal.value = (texto + " [NOTIFICADO]").trim();
+                } else {
+                    txtAreaOriginal.value = texto;
+                }
+                dispararEventos(txtAreaOriginal);
+            }, true); // Capturando (executa antes dos listeners de bubbling do Angular)
+        }
+
         // Lógica de seleção do menu padronizado
         select.addEventListener('change', function() {
             const idx = this.value;
@@ -367,7 +437,7 @@
                 selectImp.focus();
 
                 acumularTextoOficial(opcaoSelecionada.prefixo);
-            }
+            } 
             // Lógica do Campo Aberto (Normal)
             else if (opcaoSelecionada.precisaExtra) {
                 divImpedimento.style.display = 'none';
@@ -378,7 +448,7 @@
                 inputExtra.focus();
 
                 acumularTextoOficial(opcaoSelecionada.prefixo);
-            }
+            } 
             // Opções Simples
             else {
                 divImpedimento.style.display = 'none';
@@ -418,11 +488,11 @@
         selectImp.addEventListener('change', function() {
             const val = this.value;
             if (!val) return;
-
+            
             const opcaoSelecionada = opcoesMenu[select.value];
             const textoFinal = `${opcaoSelecionada.prefixo} | Motivo: ${val}`;
             substituirTextoTemporario(textoFinal);
-
+            
             // Conclui a seleção
             select.value = '';
             divImpedimento.style.display = 'none';
@@ -519,7 +589,7 @@
             display:none; font-family: sans-serif;
         `;
         document.body.appendChild(div);
-
+        
         // Inicializa com a última posição salva (antes de chamar tornarElementoArrastavel)
         const salvoTop = localStorage.getItem('painelContadoresServidor_top');
         const salvoLeft = localStorage.getItem('painelContadoresServidor_left');
@@ -549,7 +619,7 @@
                         <th style="width: 105px; color: #0d6efd;">Em andamento</th>
                         <th style="width: 90px; color: #b02a37;">Pendentes</th>
                         <th style="width: 70px;">% Fin.</th>
-                        <th style="width: 100px; color: #dc3545;">⚠️ Notificação</th>
+                        <th style="width: 100px; color: #dc3545;">📖 Notificação</th>
                     </tr>
                     <tr>
                         <td id="srv-total" style="font-weight: bold; padding: 6px;">-</td>
@@ -573,8 +643,8 @@
                             <th style="width: 50px; color: #157347;">Fin</th>
                             <th style="width: 60px; color: #0d6efd;">Andam</th>
                             <th style="width: 50px; color: #b02a37;">Pend</th>
-                            <th style="width: 45px; color: #dc3545;">⚠️ Notif</th>
-                            <th style="width: 250px; color: #d63384; text-align: left; padding-left: 6px;">Situação</th>
+                            <th style="width: 45px; color: #dc3545;">📖 Notif</th>
+                            <th style="width: 250px; color: #d63384; text-align: left; padding-left: 6px;">Situação do Lote</th>
                         </tr>
                         <tr id="row-p1">
                             <td style="font-weight:bold; background:#ffe3e3; color:#b02a37;">P1</td>
@@ -602,9 +672,9 @@
                 <!-- Seção da Fila de Trabalho Consolidada com Filtros Dinâmicos -->
                 <div id="wrapperFilaTrabalho" style="margin-top: 12px; border-top: 1px dotted #ccc; padding-top: 8px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                        <span style="font-weight: bold; font-size: 13px; color: #495057;">📋 Meus Processos</span>
+                        <span style="font-weight: bold; font-size: 13px; color: #495057;">📋 Fila de Trabalho (Todas as Páginas)</span>
                     </div>
-
+                    
                     <!-- Linha com os Seletores de Filtros -->
                     <div style="display: flex; gap: 6px; margin-bottom: 6px; align-items: center;">
                         <select id="filtroStatus" style="flex: 1; padding: 3px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; cursor: pointer; height: 26px;">
@@ -628,7 +698,7 @@
                             <option value="S/P">Prioridade: Sem Prio (S/P)</option>
                         </select>
                         <button id="btnFiltroNotif" data-ativo="false" style="flex: 1; padding: 3px 6px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; color: #495057; font-weight: bold; cursor: pointer; height: 26px; transition: all 0.2s; white-space: nowrap;">
-                            ⚠️ Apenas Notificados
+                            📖 Notif
                         </button>
                     </div>
 
@@ -680,7 +750,7 @@
                 const ativo = btnNotif.getAttribute('data-ativo') === 'true';
                 const novoEstado = !ativo;
                 btnNotif.setAttribute('data-ativo', String(novoEstado));
-
+                
                 if (novoEstado) {
                     btnNotif.style.background = '#dc3545';
                     btnNotif.style.color = '#fff';
@@ -693,6 +763,8 @@
                 atualizarFilaTrabalhoPainel();
             };
         }
+
+
 
         tornarElementoArrastavel(painel, document.getElementById("cabecalhoPainelServidor"));
         atualizarFilaTrabalhoPainel();
@@ -721,7 +793,7 @@
         let botaoAlvo = null;
         if (paginatorContainer) {
             botaoAlvo = paginatorContainer.querySelector(`[aria-label="Page ${numeroPagina}"], [aria-label="Página ${numeroPagina}"], [aria-label="page ${numeroPagina}"]`);
-
+            
             if (!botaoAlvo) {
                 const botoesAria = Array.from(paginatorContainer.querySelectorAll('[aria-label*="Page"], [aria-label*="Página"], [aria-label*="page"]'));
                 botaoAlvo = botoesAria.find(b => {
@@ -863,16 +935,16 @@
             // Adiciona classe de foco persistente
             linhaAlvo.classList.add('tontom-linha-focada');
 
-            // Injeta o badge visual "📍"
+            // Injeta o badge visual "📍 Focado"
             const cells = Array.from(linhaAlvo.querySelectorAll('td'));
             const cellNpu = cells.find(td => /\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}/.test(td.innerText));
             if (cellNpu) {
                 const badge = document.createElement('span');
                 badge.className = 'tontom-badge-foco';
-                badge.innerHTML = '📍';
+                badge.innerHTML = '📍 Focado';
                 badge.title = 'Processo focado. Clique neste selo para remover o destaque.';
                 badge.style.cssText = 'display: inline-block; padding: 2px 6px; background: #0d6efd; color: #fff; font-size: 10px; font-weight: bold; border-radius: 4px; margin-right: 8px; animation: tontomBadgePulse 1s infinite alternate; font-family: sans-serif; cursor: pointer; user-select: none; vertical-align: middle;';
-
+                
                 badge.onclick = (e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -905,7 +977,7 @@
             if (matchNPU) {
                 const chaveNpu = limparNPU(matchNPU[0]);
                 const processo = processosVarridos.find(p => p.chave === chaveNpu);
-
+                
                 if (processo) {
                     // 1. Extrai o Status do DOM
                     let statusText = "Pendente";
@@ -1056,7 +1128,7 @@
 
             // O NPU vira um link interno limpo
             const linkDisplay = `<a href="#" class="npu-link-click" data-chave="${p.chave}" data-pagina="${p.pagina}" title="Ir para este processo na Tabela do SIMAP (Pág ${p.pagina})" style="color:#0d6efd; font-weight:bold; text-decoration:underline; cursor:pointer;">${p.npu}</a>`;
-
+            
             // Botão de copiar o número limpo ao lado do processo
             const botaoCopiar = `<button class="btn-copiar-npu" data-npu="${p.npu}" title="Copiar número do processo para colar no PJe" style="margin-left: 6px; padding: 1px 4px; font-size: 10px; cursor: pointer; border: 1px solid #ccc; background: #fff; border-radius: 3px; font-family: sans-serif; transition: background 0.15s;">📋</button>`;
 
@@ -1202,10 +1274,15 @@
             linhas.forEach(linha => {
                 const textoLinha = childText(linha);
                 if (!textoLinha || textoLinha.includes("Nenhum registro encontrado")) return;
-                if (!regexValidaNPU.test(textoLinha)) return;
+                
+                const matchNPU = textoLinha.match(regexValidaNPU);
+                if (!matchNPU) return;
 
-                if (processosMapeados.has(textoLinha)) return;
-                processosMapeados.add(textoLinha);
+                const npuFormatado = matchNPU[0];
+                const chaveNpu = limparNPU(npuFormatado);
+
+                if (processosMapeados.has(chaveNpu)) return;
+                processosMapeados.add(chaveNpu);
 
                 totalGeral++;
 
@@ -1222,36 +1299,30 @@
                     else if (dp.includes("Em andamento")) { andGeral++; isAnd = true; statusText = "Em andamento"; }
                 }
 
-                const matchNPU = textoLinha.match(regexValidaNPU);
-                if (matchNPU) {
-                    const chaveNpu = limparNPU(matchNPU[0]);
-                    const npuFormatado = matchNPU[0];
-                    let prioridadeIdentificada = null;
+                let prioridadeIdentificada = null;
+                if (BANCO_PRIORIDADES.has(chaveNpu)) {
+                    prioridadeIdentificada = BANCO_PRIORIDADES.get(chaveNpu);
+                    const nivelPrioBase = parseInt(prioridadeIdentificada, 10); // Agrupa 4.1 e 4.2 no contador 4
 
-                    if (BANCO_PRIORIDADES.has(chaveNpu)) {
-                        prioridadeIdentificada = BANCO_PRIORIDADES.get(chaveNpu);
-                        const nivelPrioBase = parseInt(prioridadeIdentificada, 10); // Agrupa 4.1 e 4.2 no contador 4
-
-                        if (nivelPrioBase >= 1 && nivelPrioBase <= 4) {
-                            contadoresPrio[nivelPrioBase].total++;
-                            contadoresPrio[nivelPrioBase].notif += qtdLivrosNaLinha;
-                            if (isFin) contadoresPrio[nivelPrioBase].fin++;
-                            else if (isAnd) contadoresPrio[nivelPrioBase].and++;
-                        }
+                    if (nivelPrioBase >= 1 && nivelPrioBase <= 4) {
+                        contadoresPrio[nivelPrioBase].total++;
+                        contadoresPrio[nivelPrioBase].notif += qtdLivrosNaLinha;
+                        if (isFin) contadoresPrio[nivelPrioBase].fin++;
+                        else if (isAnd) contadoresPrio[nivelPrioBase].and++;
                     }
-
-                    const parsedPrio = prioridadeIdentificada ? parseFloat(String(prioridadeIdentificada).replace(',', '.')) : 999;
-
-                    processosVarridos.push({
-                        npu: npuFormatado,
-                        chave: chaveNpu,
-                        prioridade: prioridadeIdentificada || "S/P",
-                        prioValor: parsedPrio,
-                        status: statusText,
-                        notif: qtdLivrosNaLinha,
-                        pagina: paginaAtual
-                    });
                 }
+
+                const parsedPrio = prioridadeIdentificada ? parseFloat(String(prioridadeIdentificada).replace(',', '.')) : 999;
+
+                processosVarridos.push({
+                    npu: npuFormatado,
+                    chave: chaveNpu,
+                    prioridade: prioridadeIdentificada || "S/P",
+                    prioValor: parsedPrio,
+                    status: statusText,
+                    notif: qtdLivrosNaLinha,
+                    pagina: paginaAtual
+                });
             });
 
             atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, true);
@@ -1270,32 +1341,8 @@
         atualizarFilaTrabalhoPainel();
     }
 
-    function substituirIconeNotificacao() {
-        const livros = document.querySelectorAll('i.pi-book.text-red-500, i.pi.pi-book.text-red-500');
-        livros.forEach(el => {
-            el.classList.remove('pi-book', 'text-red-500');
-            el.classList.add('pi', 'pi-exclamation-triangle', 'tontom-notif-replaced');
-            el.style.color = '#eab308';
-        });
-    }
-
-    // Função para alterar layout nativo do SIMAP (Trocar "SITUAÇÃO DO LOTE" por "SITUAÇÃO")
-    function ajustarNomesLayout() {
-        const targets = document.querySelectorAll("th, td, span, label, div.ui-outputpanel");
-        targets.forEach(el => {
-            if (el.closest('#painelContadoresServidor') || el.closest('#containerMenuTontom') || el.closest('#tontomControlesServidor')) return;
-            for (let node of el.childNodes) {
-                if (node.nodeType === Node.TEXT_NODE) {
-                    if (node.nodeValue.toUpperCase().includes("SITUAÇÃO DO LOTE")) {
-                        node.nodeValue = node.nodeValue.replace(/SITUAÇÃO DO LOTE/gi, "SITUAÇÃO");
-                    }
-                }
-            }
-        });
-    }
-
     function inlinePiBooks(linha) {
-        return linha.querySelectorAll('i.pi.pi-book.text-red-500, i.pi-book.text-red-500, i.tontom-notif-replaced');
+        return Array.from(linha.querySelectorAll('i.pi.pi-book.text-red-500, i.pi-book.text-red-500'));
     }
 
     // Retorna o elemento dropdown correspondente
@@ -1329,7 +1376,7 @@
         elPenGeral.style.color = penGeral > 0 ? "#b02a37" : "#157347";
         elPenGeral.style.fontWeight = penGeral > 0 ? "bold" : "normal";
 
-        // Calcula a coluna individual de Pendentes (Processos que não sofreram alteração na sessão)
+        // Indica a coluna individual de Pendentes (Processos que não sofreram alteração na sessão)
         for (let i = 1; i <= 4; i++) {
             contadoresPrio[i].pen = contadoresPrio[i].total - (contadoresPrio[i].fin + contadoresPrio[i].and);
         }
@@ -1376,7 +1423,7 @@
             } else {
                 // Lote acima está limpo OU apenas em andamento (com pendência de prazo/sistema), liberando a linha atual!
                 if (pData.fin === pData.total) {
-                    elAlerta.innerText = "✅ 100% FINALIZADO";
+                    elAlerta.innerText = (i === 1) ? "✅ Lote 100% Concluído" : "✅ Concluído";
                     elAlerta.style.color = "#157347";
                 } else if (pData.pen > 0) {
                     // Tem pendências brutas no lote atual
@@ -1394,15 +1441,36 @@
     // Torna o elemento arrastável na tela
     function tornarElementoArrastavel(elemento, gatilho) {
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+        
+        // Aplica posição salva anteriormente se existir
+        const salvoTop = localStorage.getItem(elemento.id + '_top');
+        const salvoLeft = localStorage.getItem(elemento.id + '_left');
+        if (salvoTop && salvoLeft) {
+            elemento.style.top = salvoTop;
+            elemento.style.left = salvoLeft;
+        }
+
         if (gatilho) {
             gatilho.onmousedown = dragMouseDown;
-        } else {
-            elemento.onmousedown = dragMouseDown;
         }
+        
+        // Permite arrastar por qualquer área neutra (vazia) do próprio painel
+        elemento.onmousedown = function(e) {
+            // Ignora cliques em elementos interativos
+            const tag = e.target.tagName;
+            const classes = String(e.target.className || "");
+            const ids = String(e.target.id || "");
+            
+            if (tag === 'BUTTON' || tag === 'SELECT' || tag === 'INPUT' || tag === 'A' || tag === 'TH' || tag === 'TD' ||
+                ids.includes('cabecalho') || e.target.closest('#cabecalhoPainelServidor') ||
+                classes.includes('btn') || classes.includes('p-dropdown') || classes.includes('npu-link-click')) {
+                return;
+            }
+            dragMouseDown(e);
+        };
 
         function dragMouseDown(e) {
             e = e || window.event;
-            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT') return;
             e.preventDefault();
             pos3 = e.clientX;
             pos4 = e.clientY;
@@ -1417,16 +1485,35 @@
             pos2 = pos4 - e.clientY;
             pos3 = e.clientX;
             pos4 = e.clientY;
-            elemento.style.top = (elemento.offsetTop - pos2) + "px";
-            elemento.style.left = (elemento.offsetLeft - pos1) + "px";
+            
+            let novoTop = elemento.offsetTop - pos2;
+            let novoLeft = elemento.offsetLeft - pos1;
+            
+            const h = elemento.offsetHeight || 350;
+            const w = elemento.offsetWidth || 640;
+            
+            // Permite sumir quase tudo, deixando pelo menos 15px visíveis nas quatro bordas
+            const minTop = -(h - 15);
+            const maxTop = window.innerHeight - 15;
+            const minLeft = -(w - 15);
+            const maxLeft = window.innerWidth - 15;
+            
+            if (novoTop < minTop) novoTop = minTop;
+            if (novoTop > maxTop) novoTop = maxTop;
+            if (novoLeft < minLeft) novoLeft = minLeft;
+            if (novoLeft > maxLeft) novoLeft = maxLeft;
+            
+            elemento.style.top = novoTop + "px";
+            elemento.style.left = novoLeft + "px";
         }
 
-        // Adiciona persistência de posição ao salvar as coordenadas no localStorage ao soltar o mouse
         function closeDragElement() {
             document.onmouseup = null;
             document.onmousemove = null;
-            localStorage.setItem('painelContadoresServidor_top', elemento.style.top);
-            localStorage.setItem('painelContadoresServidor_left', elemento.style.left);
+            
+            // Salva a posição final no localStorage
+            localStorage.setItem(elemento.id + '_top', elemento.style.top);
+            localStorage.setItem(elemento.id + '_left', elemento.style.left);
         }
     }
 
@@ -1444,8 +1531,8 @@
     // Observador DOM para aplicar tags de prioridade, menu e monitorar atualizações em tempo real
     const observer = new MutationObserver((mutations) => {
         // Ignora atualizações se a mutação ocorreu apenas dentro do nosso próprio painel ou menu flutuante
-        const apenasNossoPainel = mutations.every(m =>
-            m.target.closest('#painelContadoresServidor') ||
+        const apenasNossoPainel = mutations.every(m => 
+            m.target.closest('#painelContadoresServidor') || 
             m.target.closest('#containerMenuTontom') ||
             m.target.closest('#tontomControlesServidor')
         );
@@ -1457,5 +1544,157 @@
         atualizarDadosPaginaAtual();
     });
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // ==========================================
+    // PARTE 4: AUTOMAÇÃO DE BUSCA DE NPU POR HASH
+    // ==========================================
+    function executarBuscaAutomaticaNPU() {
+        const hash = window.location.hash;
+        if (!hash || !hash.startsWith("#npu=")) return;
+        const npu = hash.replace("#npu=", "").trim();
+        if (!npu) return;
+        
+        console.log("😸 [Tontom] Automatizando busca de NPU:", npu);
+        
+        let tentativas = 0;
+        const maxTentativas = 30; // 6 segundos no máximo
+        
+        // Limpa flag de click anterior
+        window.tontomFiltroClicado = false;
+        
+        const buscarInterval = setInterval(() => {
+            tentativas++;
+            if (tentativas > maxTentativas) {
+                clearInterval(buscarInterval);
+                console.warn("😸 [Tontom] Tempo limite de busca esgotado.");
+                return;
+            }
+            
+            // 1. Procura o campo de entrada do NPU
+            let inputNpu = null;
+            const inputs = Array.from(document.querySelectorAll('input'));
+            for (const input of inputs) {
+                const id = String(input.id || "").toLowerCase();
+                const name = String(input.name || "").toLowerCase();
+                const placeholder = String(input.placeholder || "").toLowerCase();
+                
+                if (id.includes("npu") || id.includes("processo") || 
+                    name.includes("npu") || name.includes("processo") || 
+                    placeholder.includes("npu") || placeholder.includes("processo")) {
+                    inputNpu = input;
+                    break;
+                }
+            }
+            
+            // Método B: Se não achou por atributos diretos, busca por label contendo "NPU"
+            if (!inputNpu) {
+                const labels = Array.from(document.querySelectorAll('label, mat-label, span, mat-placeholder'));
+                const labelNpu = labels.find(el => {
+                    const text = String(el.innerText || el.textContent || "").trim().toUpperCase();
+                    return text === "NPU" || text === "NPU:" || text === "PROCESSO" || text === "PROCESSO:";
+                });
+                
+                if (labelNpu) {
+                    const forAttr = labelNpu.getAttribute('for');
+                    if (forAttr) {
+                        inputNpu = document.getElementById(forAttr);
+                    }
+                    if (!inputNpu) {
+                        let container = labelNpu.parentElement;
+                        for (let depth = 0; depth < 4; depth++) {
+                            if (!container || container.tagName === 'BODY') break;
+                            const found = container.querySelector('input');
+                            if (found) {
+                                inputNpu = found;
+                                break;
+                            }
+                            container = container.parentElement;
+                        }
+                    }
+                }
+            }
+            
+            // 2. Se o input não for encontrado, tenta expandir a seção de Filtros (APENAS UMA VEZ)
+            if (!inputNpu) {
+                if (!window.tontomFiltroClicado) {
+                    const elements = Array.from(document.querySelectorAll('button, a, div, span, [role="button"]'));
+                    const btnFiltro = elements.find(el => {
+                        const text = String(el.innerText || el.textContent || "").trim().toLowerCase();
+                        return text.includes("filtros");
+                    });
+                    
+                    if (btnFiltro) {
+                        console.log("😸 [Tontom] Menu de filtros fechado. Clicando para expandir...");
+                        window.tontomFiltroClicado = true;
+                        
+                        // Encontra o ancestral clicável mais próximo (button ou a)
+                        let clickable = btnFiltro;
+                        while (clickable && clickable.tagName !== 'BODY') {
+                            const tag = clickable.tagName;
+                            const role = clickable.getAttribute('role');
+                            const cls = String(clickable.className || "");
+                            if (tag === 'BUTTON' || tag === 'A' || role === 'button' || cls.includes('btn') || cls.includes('button')) {
+                                break;
+                            }
+                            clickable = clickable.parentElement;
+                        }
+                        
+                        if (clickable) {
+                            clickable.click();
+                        } else {
+                            btnFiltro.click();
+                        }
+                    }
+                }
+            } else {
+                // Input encontrado! Para o loop, preenche e busca.
+                clearInterval(buscarInterval);
+                
+                // Preenche o NPU e dispara eventos para simular digitação real (necessário para Angular/React binding)
+                inputNpu.focus();
+                inputNpu.value = npu;
+                
+                const keystrokeEvents = ['focus', 'keydown', 'keypress', 'input', 'keyup', 'change', 'blur'];
+                keystrokeEvents.forEach(evtType => {
+                    inputNpu.dispatchEvent(new Event(evtType, { bubbles: true }));
+                });
+                
+                console.log("😸 [Tontom] Input do NPU preenchido com eventos de binding.");
+                
+                // Clica no botão de filtrar/pesquisar
+                setTimeout(() => {
+                    const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a'));
+                    let btnBuscar = null;
+                    for (const btn of buttons) {
+                        const text = String(btn.innerText || btn.value || "").trim().toLowerCase();
+                        if (text.includes("filtrar") || text.includes("buscar") || text.includes("pesquisar") || text === "consultar") {
+                            btnBuscar = btn;
+                            break;
+                        }
+                    }
+                    
+                    if (btnBuscar) {
+                        console.log("😸 [Tontom] Clicando no botão de busca.");
+                        btnBuscar.click();
+                    } else {
+                        const form = inputNpu.closest('form');
+                        if (form) {
+                            console.log("😸 [Tontom] Submetendo formulário.");
+                            form.submit();
+                        }
+                    }
+                }, 300);
+            }
+        }, 300);
+    }
+
+    if (window.location.hash.startsWith("#npu=")) {
+        if (document.readyState === "complete" || document.readyState === "interactive") {
+            setTimeout(executarBuscaAutomaticaNPU, 500);
+        } else {
+            window.addEventListener('load', () => setTimeout(executarBuscaAutomaticaNPU, 500));
+        }
+    }
+    window.addEventListener('hashchange', executarBuscaAutomaticaNPU);
 
 })();
