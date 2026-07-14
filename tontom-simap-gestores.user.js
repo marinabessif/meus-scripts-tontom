@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name          Tontom-Simap - Gestores 
+// @name          Tontom-Simap - Gestores (Leve)
 // @namespace     simap-tjpe
 // @version      1.6
 // @description   Extensão leve para gestores: injeta tags de prioridade (P1-P9) nos NPUs e exibe o menu flutuante de observações padronizadas na tela de cumprimento de processos.
@@ -191,7 +191,7 @@
                 const chk = obterCheckboxNotificar();
                 const isChecked = isCheckboxChecked(chk);
                 let texto = txtAreaOriginal.value.trim();
-
+                
                 texto = texto.replace(/[\s]*\[NOTIFICADO\]/g, '').trim();
                 if (isChecked) {
                     txtAreaOriginal.value = (texto + " [NOTIFICADO]").trim();
@@ -328,7 +328,7 @@
     function extrairPrioridade(textoCelula) {
         if (!textoCelula) return null;
         const clean = String(textoCelula).trim();
-
+        
         // 1. Tenta número (com ou sem decimal) no início da célula (ex: "1", "1.1", "2 - (+20 dias)")
         let m = clean.match(/^\s*(\d+(?:[.,]\d+)?)/);
         if (m) {
@@ -336,7 +336,7 @@
             const base = parseInt(valorStr, 10);
             if (base >= 1 && base <= 11) return valorStr;
         }
-
+        
         // 2. Tenta padrões com prefixos comuns (ex: "P1", "P 1.1", "Origem 2", "Prioridade 4")
         m = clean.match(/(?:P|p|Origem|Prioridade)\s*(\d+(?:[.,]\d+)?)/i);
         if (m) {
@@ -364,11 +364,11 @@
         const idxNPU = header.findIndex(h => h === "NPU" || h.includes("PROCESSO") || h.includes("NUMERO"));
         let idxTipo = header.findIndex(h => h === "ORIGEM" || h === "ORIGENS" || h.includes("TIPO") || h === "PRIORIDADE" || h === "PRIO");
         const idxData = header.findIndex(h => h.includes("DATA") || h.includes("INCLU") || h.includes("ENTRAD") || h.includes("DISTRIB"));
-
+        
         if (idxTipo < 0) {
             idxTipo = header.findIndex(h => h.includes("ORIGEM") || h.includes("PRIO"));
         }
-
+        
         BANCO_PRIORIDADES.clear();
 
         dados.forEach(row => {
@@ -393,7 +393,7 @@
                 data: dataStr
             });
         });
-
+        
         console.log("😸 [Tontom] Planilha carregada. Itens no banco de prioridades:", BANCO_PRIORIDADES.size);
         aplicarTagsNaTela();
     }
@@ -402,7 +402,7 @@
         const { id, gid } = extrairIdEAbas(URL_PLANILHA);
         if (!id) return;
         const csvUrl = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`;
-
+        
         // Tenta baixar com fetch comum primeiro
         fetch(csvUrl)
             .then(res => {
@@ -415,7 +415,7 @@
             })
             .catch(err => {
                 console.log("😸 [Tontom] Fetch direto falhou (CORS/Offline). Tentando GM_xmlhttpRequest...", err);
-
+                
                 // Fallback para GM_xmlhttpRequest
                 GM_xmlhttpRequest({
                     method: "GET",
@@ -497,7 +497,7 @@
     // ==========================================
     // PARTE 3: BOTÃO FLUTUANTE "COLAR NPU E BUSCAR" + VISUAL DEBUGGER LOGS
     // ==========================================
-
+    
     // Função para mostrar logs visuais na tela
     function mostrarLogVisual(msg, cor = '#1a73e8') {
         let box = document.getElementById('tontomLogVisual');
@@ -524,7 +524,7 @@
         }
         box.style.borderLeftColor = cor;
         box.innerHTML = `<div style="font-weight:bold; margin-bottom:5px; color:${cor}">😸 Tontom Status:</div><div>${msg}</div>`;
-
+        
         // Remove após 5 segundos se for mensagem de sucesso ou erro final
         if (cor !== '#1a73e8' && cor !== '#e65100') { // se for verde ou vermelho
             setTimeout(() => {
@@ -536,22 +536,22 @@
     // Helper: Localizar o input NPU no DOM
     function localizarInputNPU() {
         const inputs = Array.from(document.querySelectorAll('input'));
-
+        
         // Método A: Busca direta por atributos do input
         for (const input of inputs) {
             const id = String(input.id || "").toLowerCase();
             const name = String(input.name || "").toLowerCase();
             const placeholder = String(input.placeholder || "").toLowerCase();
             const ariaLabel = String(input.getAttribute("aria-label") || "").toLowerCase();
-
-            if (id.includes("npu") || id.includes("processo") ||
-                name.includes("npu") || name.includes("processo") ||
+            
+            if (id.includes("npu") || id.includes("processo") || 
+                name.includes("npu") || name.includes("processo") || 
                 placeholder.includes("npu") || placeholder.includes("processo") ||
                 ariaLabel.includes("npu") || ariaLabel.includes("processo")) {
                 if (input.offsetParent !== null || input.offsetWidth > 0) return input;
             }
         }
-
+        
         // Método B: Busca pelo texto do label associado
         const labels = Array.from(document.querySelectorAll('label, mat-label, span, mat-placeholder, p'));
         for (const lbl of labels) {
@@ -562,7 +562,7 @@
                     const inp = document.getElementById(forAttr);
                     if (inp && (inp.offsetParent !== null || inp.offsetWidth > 0)) return inp;
                 }
-
+                
                 // Procura inputs próximos subindo a árvore
                 let container = lbl.parentElement;
                 for (let d = 0; d < 5; d++) {
@@ -579,10 +579,10 @@
         if (visibleInputs.length === 1) {
             return visibleInputs[0];
         }
-
+        
         return null;
     }
-
+    
     // Helper: Preencher input de forma compatível com Angular/React framework
     function preencherInputAngular(input, valor) {
         input.focus();
@@ -599,59 +599,59 @@
         input.value = valor;
         input.dispatchEvent(new Event('input', { bubbles: true }));
     }
-
+    
     // Helper: Expandir filtros e preencher NPU
     function expandirFiltrosEBuscar(npu) {
         mostrarLogVisual("Iniciando busca automática do NPU " + npu, "#1a73e8");
-
+        
         let fase1Count = 0;
         let filtroClicado = false;
-
+        
         const fase1 = setInterval(() => {
             fase1Count++;
-
+            
             // Timeout após ~10 segundos (33 * 300ms)
-            if (fase1Count > 33) {
-                clearInterval(fase1);
-
+            if (fase1Count > 33) { 
+                clearInterval(fase1); 
+                
                 // DIAGNÓSTICO: Coleta todos os inputs da tela para ajudar a descobrir o problema
                 const inputsEncontrados = Array.from(document.querySelectorAll('input')).map(inp => {
                     return `[ID:${inp.id || 'sem-id'} | PlaceH:${inp.placeholder || 'sem-plh'} | Vis:${inp.offsetParent !== null}]`;
                 }).slice(0, 5).join('<br>');
-
+                
                 mostrarLogVisual(
-                    `Tempo esgotado.<br><b>Inputs na tela:</b><br>${inputsEncontrados || 'Nenhum input encontrado'}`,
+                    `Tempo esgotado.<br><b>Inputs na tela:</b><br>${inputsEncontrados || 'Nenhum input encontrado'}`, 
                     "#e53935"
                 );
-                return;
+                return; 
             }
-
+            
             // Verifica se o input já apareceu
             const inputExistente = localizarInputNPU();
             if (inputExistente) {
                 clearInterval(fase1);
                 mostrarLogVisual("Input NPU localizado! Preenchendo dados...", "#1a73e8");
                 preencherInputAngular(inputExistente, npu);
-
+                
                 // Vai para a fase de clicar em pesquisar
                 setTimeout(() => clicarPesquisar(inputExistente), 600);
                 return;
             }
-
+            
             // Se ainda não achou o input e ainda não clicou em Filtros, clica uma vez
             if (!filtroClicado) {
                 mostrarLogVisual("Painel de filtros fechado. Tentando abrir...", "#f57c00");
-
+                
                 // Busca ampla por botões ou clickables que contenham "filtro" no texto
                 const clickables = Array.from(document.querySelectorAll('button, a, [role="button"], .mat-focus-indicator, .btn'));
                 const btnFiltro = clickables.find(el => {
                     const text = String(el.innerText || el.textContent || "").trim().toLowerCase();
                     return text.includes("filtro");
                 });
-
+                
                 if (btnFiltro) {
                     filtroClicado = true;
-
+                    
                     // Sobe na árvore DOM para achar o botão real mais próximo
                     let alvo = btnFiltro;
                     let p = btnFiltro;
@@ -659,11 +659,11 @@
                         p = p.parentElement;
                         if (!p || p.tagName === 'BODY') break;
                         if (p.tagName === 'BUTTON' || p.tagName === 'A' || p.getAttribute('role') === 'button') {
-                            alvo = p;
+                            alvo = p; 
                             break;
                         }
                     }
-
+                    
                     // Clica no botão
                     if (alvo !== btnFiltro) {
                         alvo.click();
@@ -677,12 +677,12 @@
             }
         }, 300);
     }
-
+    
     // Helper: Clicar no botão Pesquisar
     function clicarPesquisar(inputRef) {
         mostrarLogVisual("Preenchido! Procurando botão Pesquisar...", "#1a73e8");
         let count = 0;
-
+        
         const interval = setInterval(() => {
             count++;
             if (count > 15) {
@@ -697,18 +697,18 @@
                 }
                 return;
             }
-
+            
             const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a, [role="button"]'));
             for (const btn of buttons) {
                 const t = String(btn.innerText || btn.textContent || btn.value || "").trim().toLowerCase();
                 const cls = String(btn.className || "").toLowerCase();
                 const id = String(btn.id || "").toLowerCase();
-
+                
                 // Verifica texto comum de pesquisa OU classe/id que contenha termos de busca
                 const matchesText = t.includes("pesquisar") || t.includes("buscar") || t.includes("filtrar") || t === "consultar" || t === "ok";
                 const matchesClass = cls.includes("search") || cls.includes("find") || cls.includes("lupa") || cls.includes("filtrar");
                 const matchesId = id.includes("search") || id.includes("find") || id.includes("buscar");
-
+                
                 if ((matchesText || matchesClass || matchesId) && (btn.offsetParent !== null || btn.offsetWidth > 0)) {
                     clearInterval(interval);
                     mostrarLogVisual("Botão Pesquisar encontrado! Executando busca...", "#2e7d32");
@@ -718,11 +718,11 @@
             }
         }, 250);
     }
-
+    
     // ---- BOTÃO FLUTUANTE "COLAR NPU E BUSCAR" ----
     function criarBotaoColaNPU() {
         if (document.getElementById('tontomBtnColaNPU')) return;
-
+        
         const btn = document.createElement('div');
         btn.id = 'tontomBtnColaNPU';
         btn.innerHTML = '📋 Colar NPU e Buscar';
@@ -746,7 +746,7 @@
             align-items: center;
             gap: 6px;
         `;
-
+        
         // Aplica posição salva se existir
         const salvoTop = localStorage.getItem('tontomBtnColaNPU_top');
         const salvoLeft = localStorage.getItem('tontomBtnColaNPU_left');
@@ -756,15 +756,15 @@
             btn.style.top = salvoTop;
             btn.style.left = salvoLeft;
         }
-
+        
         btn.onmouseenter = () => { btn.style.transform = 'scale(1.05)'; btn.style.boxShadow = '0 6px 20px rgba(0,0,0,0.4)'; };
         btn.onmouseleave = () => { btn.style.transform = 'scale(1)'; btn.style.boxShadow = '0 4px 15px rgba(0,0,0,0.3)'; };
-
+        
         // Lógica de arrastar (Drag and Drop)
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
         let arrastou = false;
         let startX = 0, startY = 0;
-
+        
         btn.onmousedown = (e) => {
             if (e.button !== 0) return; // Apenas botão esquerdo do mouse
             arrastou = false;
@@ -772,53 +772,53 @@
             startY = e.clientY;
             pos3 = e.clientX;
             pos4 = e.clientY;
-
+            
             document.onmouseup = closeDragElement;
             document.onmousemove = elementDrag;
             btn.style.cursor = 'grabbing';
         };
-
+        
         function elementDrag(e) {
             e.preventDefault();
             // Se mover mais do que 6 pixels, ativa flag de arrasto
             if (Math.abs(e.clientX - startX) > 6 || Math.abs(e.clientY - startY) > 6) {
                 arrastou = true;
             }
-
+            
             pos1 = pos3 - e.clientX;
             pos2 = pos4 - e.clientY;
             pos3 = e.clientX;
             pos4 = e.clientY;
-
+            
             btn.style.bottom = 'auto';
             btn.style.right = 'auto';
             btn.style.top = (btn.offsetTop - pos2) + "px";
             btn.style.left = (btn.offsetLeft - pos1) + "px";
         }
-
+        
         function closeDragElement() {
             document.onmouseup = null;
             document.onmousemove = null;
             btn.style.cursor = 'pointer';
-
+            
             // Salva a nova posição
             localStorage.setItem('tontomBtnColaNPU_top', btn.style.top);
             localStorage.setItem('tontomBtnColaNPU_left', btn.style.left);
         }
-
+        
         btn.onclick = async (e) => {
             if (arrastou) {
                 // Impede o clique de disparar se o botão foi arrastado
                 arrastou = false;
                 return;
             }
-
+            
             try {
                 // Tenta ler o clipboard
                 const textoClipboard = await navigator.clipboard.readText();
                 // Limpa o NPU: mantém apenas dígitos, pontos e traços
                 const npuLimpo = textoClipboard.replace(/[^\d.-]/g, '').trim();
-
+                
                 if (!npuLimpo || npuLimpo.length < 5) {
                     mostrarLogVisual("Área de transferência não contém um NPU válido.", "#e53935");
                     btn.innerHTML = '❌ NPU inválido';
@@ -829,17 +829,27 @@
                     }, 2000);
                     return;
                 }
-
-                btn.innerHTML = '⏳ Buscando...';
-                btn.style.background = 'linear-gradient(135deg, #43a047, #2e7d32)';
-
-                expandirFiltrosEBuscar(npuLimpo);
-
-                setTimeout(() => {
-                    btn.innerHTML = '📋 Colar NPU e Buscar';
-                    btn.style.background = 'linear-gradient(135deg, #1a73e8, #0d47a1)';
-                }, 3000);
-
+                
+                const targetUrl = `https://simap.svc.tjpe.jus.br/historico-servidor-processo#npu=${npuLimpo}`;
+                const isCorrectPage = window.location.hostname === 'simap.svc.tjpe.jus.br' && window.location.pathname.includes('/historico-servidor-processo');
+                
+                if (isCorrectPage) {
+                    btn.innerHTML = '⏳ Buscando...';
+                    btn.style.background = 'linear-gradient(135deg, #43a047, #2e7d32)';
+                    
+                    window.location.hash = `npu=${npuLimpo}`;
+                    expandirFiltrosEBuscar(npuLimpo);
+                    
+                    setTimeout(() => {
+                        btn.innerHTML = '📋 Colar NPU e Buscar';
+                        btn.style.background = 'linear-gradient(135deg, #1a73e8, #0d47a1)';
+                    }, 3000);
+                } else {
+                    btn.innerHTML = '⏳ Redirecionando...';
+                    btn.style.background = 'linear-gradient(135deg, #f57c00, #e65100)';
+                    window.location.href = targetUrl;
+                }
+                
             } catch(err) {
                 console.error("😸 [Tontom] Erro ao ler clipboard:", err);
                 mostrarLogVisual("Erro ao ler área de transferência. Dica: Clique na página para dar foco antes de clicar no botão.", "#f57c00");
@@ -851,14 +861,14 @@
                 }, 3000);
             }
         };
-
+        
         document.body.appendChild(btn);
     }
-
+    
     // Injeta o botão flutuante periodicamente (para SPAs Angular que recarregam o DOM)
     setInterval(criarBotaoColaNPU, 2000);
     criarBotaoColaNPU();
-
+    
     // ---- HASH DETECTION (bônus: funciona quando abre no mesmo Chrome) ----
     function executarBuscaAutomaticaNPU() {
         const hash = window.location.hash;
@@ -867,7 +877,7 @@
         if (!npu) return;
         setTimeout(() => expandirFiltrosEBuscar(npu), 1500);
     }
-
+    
     if (window.location.hash.startsWith("#npu=")) {
         if (document.readyState === "complete") {
             setTimeout(executarBuscaAutomaticaNPU, 1500);
@@ -878,3 +888,4 @@
     window.addEventListener('hashchange', executarBuscaAutomaticaNPU);
 
 })();
+
