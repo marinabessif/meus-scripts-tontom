@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name          Tontom-Simap - Gestores (Leve)
+// @name          Tontom-Simap - Gestores 
 // @namespace     simap-tjpe
 // @version      1.7
 // @description   Extensão leve para gestores: injeta tags de prioridade (P1-P9) nos NPUs e exibe o menu flutuante de observações padronizadas na tela de cumprimento de processos.
