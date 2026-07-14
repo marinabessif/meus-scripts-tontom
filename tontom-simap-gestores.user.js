@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          Tontom-Simap - Gestores
+// @name          Tontom-Simap - Gestores 
 // @namespace     simap-tjpe
-// @version      1.2.1
-// @description   Seletor de equipes, Status, Prioridades e Menu de observações padronizadas
+// @version      1.6
+// @description   Extensão leve para gestores: injeta tags de prioridade (P1-P9) nos NPUs e exibe o menu flutuante de observações padronizadas na tela de cumprimento de processos.
 // @match         https://simap.svc.tjpe.jus.br/*
 // @match         https://*.tjpe.jus.br/*
 // @grant        GM_xmlhttpRequest
@@ -15,9 +15,11 @@
 
 (function () {
     'use strict';
-    const URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1v4cbLicC3ilOx-cS7PP9pV82y4H6jcS_QsNn32Jcz3s/edit?gid=0#gid=0";
+    const URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1RFS3XkGQ7Ga1NqCMXJmqYGcR-JBCXtYB7r51quVb0yE/edit?gid=1744875210";
 
-GM_addStyle(`
+    console.log("😸 [Tontom] Iniciando extensão leve v1.5.2...");
+
+    GM_addStyle(`
 .tag-prioridade {
     display:inline-block;
     padding:2px 6px;
@@ -39,609 +41,253 @@ GM_addStyle(`
 .prio-p9 { background:#64748b !important; }
 `);
 
-const BANCO_PRIORIDADES = new Map();
+    const BANCO_PRIORIDADES = new Map();
 
-    let telaProcessosAberta = false;
-    let varreduraAtiva = false;
-    let varreduraPausada = false;
-    let indiceAtualVarredura = 0;
-    let abortarVarreduraAtual = false;
-
-    const equipes = {
-        "Todas": [],
-        "Equipe 1": ["ELIANE MARIA SANTOS RODARTE ANDRADE", "FABIO BORGES GONCALVES", "HI MEET SHIUE", "MARIA LUCIANA DA SILVA", "MARCELLE SÁ CARNEIRO MENDONÇA", "MARTA MARIA BARBARA", "MOYSA MARIA DE SOUZA LEAO SALES", "TAYSSA MAYARA PEDERNEIRAS PAZ", "MARIANA PORTO GOMES DE CARVALHO"],
-        "Equipe 2": ["MARINA BESSI FERNANDES", "ANA ELIZABETH AGUIAR CAVALCANTI", "ANE VICTOR ALVES CARDOSO", "BLANIA LEUCHTEMBERG DE OLIVEIRA", "DIANA GONCALVES BOTELHO", "ISOLDA MARIA AZEVEDO DE LYRA", "MARIA INEZ MENEZES DOS SANTOS", "SABRINA SERRANO BARBOSA", "SAMARA OLIVEIRA DE MELO", "JULIANA SABRINA CABRAL RODRIGUES"],
-        "Equipe 3": ["ADRIANA MINDELO CAVALCANTI DE ALBUQUERQUE", "CARLOS EDUARDO GOMES DE MELO", "EVERSON PAULO DO NASCIMENTO", "LUCIANA TEIXEIRA DE MAGALHAES", "MICHELE ELIAS SANTOS SOUZA", "RAQUEL FERREIRA DOS SANTOS NIPPO", "ROBERTA CORTEZ DE CARVALHO", "SIDNEY PEDROSA DE MELO", "JOAO VICTOR SARAIVA WENCESLAU"],
-        "Equipe 4": ["ANA ELISABETE PROCOPIO DE ALMEIDA", "CAROLINA JORDAN", "CLAUDIA LOBO DA COSTA CARVALHO AMORIM", "EUDALIA MARIA ALVES FONSECA", "GESLAINE DA SILVA FERREIRA", "JOSE AUGUSTO BRAGA", "JULIANA DE SOUSA AMORIM", "KAREN SAVANNA BRILHANTE ALVES MIYAKAWA", "LUCIANA CARMONA BOTELHO"],
-        "Equipe 5": ["ADALBERTO DA SOLEDADE SILVA FILHO", "JANAINA FERRO DE SOUSA PORFIRIO LIMA", "JULIANA CARNEIRO DA MOTTA", "JULIANA PONTES A DE A LOPES TAVARES", "LIDIA SERRANO BARBOSA SANTOS", "MAYARA SIMONI LAET DE ANDRADE", "PATRICIA VIEIRA DE L ALBUQUERQUE NOVAES", "SIMONE NANES VILELA", "LARISSA NOGUEIRA BESSA"],
-        "Equipe 6": ["BERGSON DANTAS DE MOURA BARBOSA", "FERNANDA ALVES DA SILVA", "IAMANDA LEUSE CAMPOS DE LIMA", "ITALO JORGE CAVALCANTI DE A NUNES", "NATALIA MARIA CATÃO VILELA", "ROBERTO FERREIRA DA SILVA", "SILVANA MARIA ROCHA PEREIRA FRAGOSO", "TASSIA REBECA RATIS DA SILVA", "TERCIA VANESSA MATIAS DE OLIVEIRA"],
-        "Equipe 7": ["ANA CLAUDIA DE MELO MARQUES LUZ", "CARLOS DE LIMA RIBEIRO JUNIOR", "CHARLES TONY DE OLIVEIRA LIRA", "FRANCIELLE MARIA DA SILVA MACEDO DE ANDRADE", "IRACY CABRAL DAS NEVES", "JULIANA TAVARES CORDEIRO GALVÃO", "LADJANE FERREIRA GUIMARAES", "POLLYHANE MAYUMI ALMEIDA", "THAMYRIS FERREIRA SANTOS"],
-        "Equipe 8": ["ANDRE DA SILVA CORDOVILE", "CAIO LUIZ NEVES MAIA", "CHRISTIANE O DE ALMEIDA G MOTA BARRETO", "LUCIANA FLÁVIA DO NASCIMENTO", "MUNIK LUCIENE DE FONTES", "ROSEANE SANTOS DE ANDRADE", "SHEILA CRISTINA RODRIGUES DE LIMA ARAUJO", "TARCISIO BATISTA DA SILVA JUNIOR", "THALLES SIZENANDO AZEVEDO DIAS"],
-        "Equipe 9": ["ALUSKA SUYANNE MARQUES DA SILVA", "ELISA CARLA CAMPOS TAVARES", "ERICKSON MOURA DE QUEIROZ", "FRANCISCO ELTOMAR MARTINS FERREIRA", "LILIAN AVELINO DE MORAIS", "OTIMAR ANTÔNIO DA SILVA", "SIMONE DE MEDEIROS TORRES", "SIMONE DOS PASSOS E SILVA LEITE", "TACIANA MARTINS AMORIM BARBOSA BARROS"],
-        "Equipe 10": ["ALEXANDRE LINDOSO DE ARAÚJO", "DAYANE FERNANDES MESSIAS", "FABIO COSTA TAVARES DA SILVA", "KALENNE FRANMARRY B ALVES MIYAKAWA", "MARILIA DOHERTY AYRES", "SILVIO MUCIO DE MACEDO FILHO", "WAGNER JEFFERSON MEIRA FILHO"],
-        "Equipe 11": ["CAMILLA RODRIGUES MARQUES CARNEIRO", "DIEGO MOURA DA SILVA LOPES", "ELBA MARIA BARROS GALIZA PINHEIRO", "GUILHERME ALBERTI LUPCHINSKI", "JAQUELINE GONDIM SOTERO SIQUEIRA", "LAURA BUARQUE INACIO DE BARROS", "MICHELLE MARIA NASCIMENTO FILGUEIRAS", "NILSON JOSE GONCALVES DOS SANTOS SILVA", "ROSELYNE BEZERRA SMITH"]
-    };
-
-    function normalizar(texto) {
-        if (!texto) return "";
-        return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
-    }
-
-    function esperar(ms) {
-        return new Promise(r => setTimeout(r, ms));
-    }
-
-    function estamosNaTelaDeServidores() {
-        const textoPagina = document.body.innerText.toUpperCase();
-        if (!textoPagina.includes("POR SERVIDOR")) return false;
-        const ths = Array.from(document.querySelectorAll('th')).map(th => th.innerText.toUpperCase());
-        return ths.some(t => t.includes("SERVIDOR") || t.includes("NOME"));
-    }
-
-    async function garantirRetornoParaRaiz() {
-        let tentativasVolta = 0;
-        while (!estamosNaTelaDeServidores() && tentativasVolta < 15) {
-            window.history.back();
-            await esperar(1600);
-            tentativasVolta++;
-        }
-        telaProcessosAberta = false;
-        await esperar(800);
-        await resetarLista();
-    }
-
-    function obterDadosPagina() {
-        const registros = [];
-        document.querySelectorAll('tr[data-cy="entityTable"]').forEach(linha => {
-            const span = linha.querySelector("td.td-clickable span") || linha.querySelector("td.td-clickable") || linha.querySelector("span");
-            if (!span || !span.innerText.trim()) return;
-
-            const nomeTxt = span.innerText.trim();
-            const totalTxt = linha.querySelectorAll("td")[1]?.innerText?.trim() || "0";
-            const totalNum = parseInt(totalTxt, 10) || 0;
-
-            registros.push({
-                nome: nomeTxt,
-                elemento: linha.querySelector("td.td-clickable") || span,
-                total: totalNum,
-                finalizados: 0,
-                emAndamento: 0,
-                saldo: totalNum,
-                percentual: "0.0%",
-                notificacoes: "-"
-            });
-        });
-        return registros;
-    }
-
-    async function coletarTodos() {
-        const mapaRegistros = new Map();
-        await resetarLista();
-
-        let ultimoPrimeiroNome = "";
-
-        while (true) {
-            if (abortarVarreduraAtual) return [];
-
-            while (varreduraPausada) {
-                await esperar(500);
-                if (abortarVarreduraAtual) return [];
-            }
-
-            const linesPagina = obterDadosPagina();
-            if (linesPagina.length > 0) {
-                const primeiroNomeAtual = linesPagina[0].nome;
-                if (primeiroNomeAtual !== ultimoPrimeiroNome) {
-                    linesPagina.forEach(reg => {
-                        mapaRegistros.set(reg.nome, reg);
-                    });
-                    ultimoPrimeiroNome = primeiroNomeAtual;
-                }
-            }
-
-            const next = document.querySelector('[aria-label="Página Seguinte"]');
-            if (!next || next.disabled || next.getAttribute('aria-disabled') === 'true') break;
-
-            next.click();
-            await esperar(1800);
-        }
-        return Array.from(mapaRegistros.values());
-    }
-
-    async function carregarEquipe() {
-        abortarVarreduraAtual = true;
-        varreduraAtiva = false;
-        varreduraPausada = false;
-        indiceAtualVarredura = 0;
-        atualizarBotaoPauseUI();
-        await esperar(800);
-        abortarVarreduraAtual = false;
-
-        const equipe = document.getElementById("simapEquipe").value;
-
-        if (!estamosNaTelaDeServidores()) {
-            await garantirRetornoParaRaiz();
-            if (!estamosNaTelaDeServidores()) {
-                alert("Por favor, retornar manualmente para a listagem principal antes de carregar.");
-                return;
-            }
-        }
-
-        varreduraAtiva = true;
-        atualizarBotaoPauseUI();
-
-        const painel = document.getElementById("resultadoEquipe");
-        painel.style.display = "block";
-        painel.style.cssText = `
-            position:fixed; top:75px; left:20px; width:220px; height: auto;
-            background:#fff; border:1px solid #ffc107; padding:10px; z-index:9999;
-            border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,.2);
-            font-family: sans-serif; font-size: 13px; font-weight: bold; color: #856404;
-        `;
-        painel.innerHTML = " 😸 Buscando servidores da equipe...";
-
-        const dados = await coletarTodos();
-
-        if (abortarVarreduraAtual) return;
-
-        let filtrados = [];
-        if (equipe === "Todas") {
-            filtrados = dados;
-        } else {
-            filtrados = dados.filter(s =>
-                equipes[equipe].some(n => normalizar(s.nome).includes(normalizar(n)))
-            );
-        }
-
-        window.dadosEquipeAtual = filtrados;
-        varreduraAtiva = false;
-        atualizarBotaoPauseUI();
-        renderizarTabela(equipe, filtrados);
-    }
-
-    function renderizarTabela(nomeEquipe, listaServidores) {
-        const painel = document.getElementById("resultadoEquipe");
-        painel.style.cssText = `
-            position:fixed; top:75px; left:20px; width:950px;
-            max-height:600px; overflow:auto; background:#fff;
-            border:1px solid #ccc; padding:10px; z-index:9999;
-            border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.2);
-        `;
-
-        let html = `
-        <div id="cabecalhoPainel" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ccc; padding-bottom: 8px; margin-bottom: 8px;">
-            <h3 id="tituloPainel" style="margin: 0; font-size: 15px; font-weight: bold; color: #222; font-family: sans-serif;">Painel supervisão - ${nomeEquipe}</h3>
-            <div style="display: flex; gap: 6px;">
-                <button id="btnVerificarNotif" style="padding: 4px 10px; cursor: pointer; border: 1px solid #0d6efd; background: #0d6efd; color:#fff; border-radius: 4px; font-weight: bold; font-size: 12px;">📊 Processar Status</button>
-                <button id="btnTogglePainel" style="padding: 4px 8px; cursor: pointer; border: 1px solid #999; background: #eee; border-radius: 4px; font-weight: bold; font-size: 12px;">➖ Minimizar</button>
-                <button id="btnFecharPainel" style="padding: 4px 8px; cursor: pointer; border: 1px solid #dc3545; background: #dc3545; color: #fff; border: none; border-radius: 4px; font-weight: bold; font-size: 12px;">❌ Fechar</button>
-            </div>
-        </div>
-
-        <div id="conteudoTabelaPainel">
-            <table border="1" style="border-collapse:collapse; width:100%; text-align: center; font-family: sans-serif; font-size: 13px;">
-            <tr style="background: #f5f5f5; font-weight: bold;">
-                <th style="text-align: left; padding: 7px;">Servidor</th>
-                <th style="width: 70px;">Total</th>
-                <th style="width: 90px; color: #157347;">Finalizados</th>
-                <th style="width: 100px; color: #0d6efd;">Em andamento</th>
-                <th style="width: 130px; color: #b02a37;">Pendentes</th>
-                <th style="width: 75px;">% Fin.</th>
-                <th style="width: 110px; color: #dc3545;">⚠️ Notificações</th>
-            </tr>`;
-
-        let somaTotal = 0;
-        let somaFinalizados = 0;
-        let somaEmAndamento = 0;
-        let somaSaldo = 0;
-        let somaNotif = 0;
-        let temVarreduraRealizada = false;
-
-        listaServidores.forEach((s, idx) => {
-            somaTotal += s.total;
-            somaFinalizados += s.finalizados;
-            somaEmAndamento += s.emAndamento;
-            somaSaldo += s.saldo;
-
-            let txtNotif = s.notificacoes;
-            if (typeof s.notificacoes === 'number') {
-                somaNotif += s.notificacoes;
-                temVarreduraRealizada = true;
-                txtNotif = `<strong>${s.notificacoes}</strong>`;
-            }
-
-            const corSaldo = s.saldo > 0 ? "#b02a37" : "#157347";
-            const pesoSaldo = s.saldo > 0 ? "bold" : "normal";
-
-            html += `<tr>
-                <td class="nome-servidor" data-idx="${idx}" style="cursor:pointer; color:#0d6efd; text-decoration:underline; text-align: left; padding: 7px;">
-                    ${s.nome}
-                </td>
-                <td style="font-weight: bold;">${s.total}</td>
-                <td id="cell-fin-${idx}" style="color: #157347;">${s.notificacoes !== '-' ? s.finalizados : "-"}</td>
-                <td id="cell-and-${idx}" style="color: #0d6efd;">${s.notificacoes !== '-' ? s.emAndamento : "-"}</td>
-                <td id="cell-sal-${idx}" style="color: ${corSaldo}; font-weight: ${pesoSaldo};">${s.saldo}</td>
-                <td id="cell-per-${idx}">${s.percentual}</td>
-                <td id="cell-notif-${idx}" style="color: #dc3545;">${txtNotif}</td>
-            </tr>`;
-        });
-
-        const percentualGeral = somaTotal > 0 ? ((somaFinalizados / somaTotal) * 100).toFixed(1) + "%" : "0.0%";
-        const corSaldoGeral = somaSaldo > 0 ? "#b02a37" : "#157347";
-
-        html += `
-            <tr style="background: #e9ecef; font-weight: bold; border-top: 2px solid #bbb;">
-                <td style="text-align: left; padding: 7px; color: #333;">TOTAL DA EQUIPE</td>
-                <td style="text-align: center;">${somaTotal}</td>
-                <td id="total-fin">${temVarreduraRealizada ? somaFinalizados : "-"}</td>
-                <td id="total-and">${temVarreduraRealizada ? somaEmAndamento : "-"}</td>
-                <td id="total-sal" style="color: ${corSaldoGeral};">${somaSaldo}</td>
-                <td id="total-per">${percentualGeral}</td>
-                <td id="total-notif" style="color: #dc3545;">${temVarreduraRealizada ? somaNotif : "-"}</td>
-            </tr>
-        `;
-
-        html += `</table></div>`;
-        painel.innerHTML = html;
-
-        document.getElementById('btnVerificarNotif').addEventListener('click', () => {
-            if (!varreduraAtiva) {
-                varreduraPausada = false;
-                rodarVarreduraProfunda();
-            }
-        });
-
-        document.getElementById('btnTogglePainel').addEventListener('click', function() {
-            const divTabela = document.getElementById('conteudoTabelaPainel');
-            if (divTabela.style.display === 'none') {
-                divTabela.style.display = 'block';
-                painel.style.width = '950px';
-                this.innerText = '➖ Minimizar';
-            } else {
-                divTabela.style.display = 'none';
-                painel.style.width = 'auto';
-                this.innerText = '➕ Mostrar Painel';
-            }
-        });
-
-        document.getElementById('btnFecharPainel').addEventListener('click', () => painel.style.display = "none");
-
-        document.querySelectorAll(".nome-servidor").forEach(td => {
-            td.addEventListener("click", () => {
-                const idx = td.getAttribute("data-idx");
-                abrirServidor(window.dadosEquipeAtual[idx].nome);
-            });
-        });
-    }
-
-    function alternarPausaGlobal() {
-        if (!varreduraAtiva) return;
-        varreduraPausada = !varreduraPausada;
-        atualizarBotaoPauseUI();
-    }
-
-    function atualizarBotaoPauseUI() {
-        const btn = document.getElementById("btnGlobalPause");
-        if (!btn) return;
-
-        if (!varreduraAtiva) {
-            btn.innerText = "⏸️";
-            btn.style.background = "#e9ecef";
-            btn.disabled = true;
-            btn.title = "Nenhum processo ativo no momento";
-            return;
-        }
-
-        btn.disabled = false;
-        if (varreduraPausada) {
-            btn.innerText = "▶️";
-            btn.style.background = "#ffc107";
-            btn.title = "Processo pausado. Clique para continuar.";
-        } else {
-            btn.innerText = "⏸️";
-            btn.style.background = "#6c757d";
-            btn.title = "Processo em andamento. Clique para pausar.";
-        }
-    }
-
-    async function rodarVarreduraProfunda() {
-        varreduraAtiva = true;
-        varreduraPausada = false;
-        atualizarBotaoPauseUI();
-
-        const btnStatus = document.getElementById('btnVerificarNotif');
-        const lista = window.dadosEquipeAtual;
-
-        for (let i = indiceAtualVarredura; i < lista.length; i++) {
-            if (abortarVarreduraAtual) break;
-
-            indiceAtualVarredura = i;
-
-            while (varreduraPausada) {
-                await esperar(500);
-                if (abortarVarreduraAtual) break;
-            }
-            if (abortarVarreduraAtual) break;
-
-            const servidor = lista[i];
-            if (btnStatus) btnStatus.innerText = `⏳ (${servidor.nome.split(" ")[0]}...)`;
-
-            if (document.getElementById(`cell-fin-${i}`)) {
-                document.getElementById(`cell-fin-${i}`).innerText = "⏳";
-                document.getElementById(`cell-and-${i}`).innerText = "⏳";
-                document.getElementById(`cell-notif-${i}`).innerText = "⏳";
-            }
-
-            // Garante estabilidade na abertura com espera de segurança maior
-            await abrirServidorParaVarredura(servidor.nome);
-            if (abortarVarreduraAtual) break;
-
-            let contagemNotif = 0;
-            let contagemFinalizados = 0;
-            let contagemEmAndamento = 0;
-            const processosProcessados = new Set();
-
-            // Espera extra para renderização da primeira tela de processos do servidor
-            await esperar(800);
-
-            while (true) {
-                if (abortarVarreduraAtual) break;
-
-                while (varreduraPausada) {
-                    await esperar(500);
-                    if (abortarVarreduraAtual) break;
-                }
-                if (abortarVarreduraAtual) break;
-
-                const linesProcesso = document.querySelectorAll('tr[data-cy="entityTable"], tbody tr');
-
-                linesProcesso.forEach((linha) => {
-                    const textoLinha = linha.innerText.trim();
-                    if (!textoLinha) return;
-
-                    if (processosProcessados.has(textoLinha)) return;
-                    processosProcessados.add(textoLinha);
-
-                    const iconesVermelhos = linha.querySelectorAll('i.pi.pi-book.text-red-500, i.pi-book.text-red-500');
-                    contagemNotif += iconesVermelhos.length;
-
-                    const dp = linha.querySelector('p-dropdown, .p-dropdown');
-                    if (dp) {
-                        const label = dp.getAttribute('aria-label') || dp.querySelector('.p-dropdown-label')?.getAttribute('aria-label') || dp.querySelector('.p-dropdown-label')?.innerText?.trim();
-                        if (label) {
-                            if (label.includes("Finalizado")) {
-                                contagemFinalizados++;
-                            } else if (label.includes("Em andamento")) {
-                                contagemEmAndamento++;
-                            }
-                        }
-                    }
-                });
-
-                const nextBtn = document.querySelector('[aria-label="Página Seguinte"]');
-                if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true') break;
-
-                nextBtn.click();
-                await esperar(1800);
-            }
-
-            if (abortarVarreduraAtual) break;
-
-            const saldoCalculado = servidor.total - (contagemFinalizados + contagemEmAndamento);
-            const percentualCalculado = servidor.total > 0 ? ((contagemFinalizados / servidor.total) * 100).toFixed(1) + "%" : "0.0%";
-
-            servidor.notificacoes = contagemNotif;
-            servidor.finalizados = contagemFinalizados;
-            servidor.emAndamento = contagemEmAndamento;
-            servidor.saldo = saldoCalculado >= 0 ? saldoCalculado : 0;
-            servidor.percentual = percentualCalculado;
-
-            if (document.getElementById(`cell-fin-${i}`)) {
-                document.getElementById(`cell-fin-${i}`).innerHTML = `<strong>${contagemFinalizados}</strong>`;
-                document.getElementById(`cell-and-${i}`).innerHTML = `<strong>${contagemEmAndamento}</strong>`;
-                document.getElementById(`cell-sal-${i}`).innerHTML = `<strong>${servidor.saldo}</strong>`;
-                document.getElementById(`cell-per-${i}`).innerText = percentualCalculado;
-                document.getElementById(`cell-notif-${i}`).innerHTML = `<strong>${contagemNotif}</strong>`;
-
-                const cSaldo = document.getElementById(`cell-sal-${i}`);
-                if (servidor.saldo > 0) { cSaldo.style.color = "#b02a37"; cSaldo.style.fontWeight = "bold"; }
-                else { cSaldo.style.color = "#157347"; cSaldo.style.fontWeight = "normal"; }
-                atualizarTotaisGerais();
-            }
-
-            await garantirRetornoParaRaiz();
-        }
-
-        if (!abortarVarreduraAtual && btnStatus) {
-            btnStatus.innerText = "📊 Processar Status";
-        }
-        varreduraAtiva = false;
-        indiceAtualVarredura = 0;
-        atualizarBotaoPauseUI();
-    }
-
-    function atualizarTotaisGerais() {
-        const lista = window.dadosEquipeAtual;
-        if (!lista) return;
-        let totalGeralNotif = 0;
-        let totalGeralFin = 0;
-        let totalGeralAnd = 0;
-        let totalGeralSal = 0;
-        let temAlgumDado = false;
-
-        lista.forEach(s => {
-            if (s.notificacoes !== '-') {
-                totalGeralNotif += s.notificacoes;
-                totalGeralFin += s.finalizados;
-                totalGeralAnd += s.emAndamento;
-                temAlgumDado = true;
-            }
-            totalGeralSal += s.saldo;
-        });
-
-        if (document.getElementById('total-fin')) {
-            document.getElementById('total-fin').innerHTML = temAlgumDado ? totalGeralFin : "-";
-            document.getElementById('total-and').innerHTML = temAlgumDado ? totalGeralAnd : "-";
-            document.getElementById('total-sal').innerHTML = totalGeralSal;
-            document.getElementById('total-notif').innerHTML = temAlgumDado ? totalGeralNotif : "-";
-
-            const totalMatriz = lista.reduce((acc, curr) => acc + curr.total, 0);
-            document.getElementById('total-per').innerText = (temAlgumDado && totalMatriz > 0) ? ((totalGeralFin / totalMatriz) * 100).toFixed(1) + "%" : "0.0%";
-
-            const tSal = document.getElementById('total-sal');
-            tSal.style.color = totalGeralSal > 0 ? "#b02a37" : "#157347";
-        }
-    }
-
-    async function abrirServidorParaVarredura(nome) {
-        let travaSeguranca = 0;
-        while (!estamosNaTelaDeServidores() && travaSeguranca < 10) {
-            if (abortarVarreduraAtual) return;
-            await esperar(1000);
-            travaSeguranca++;
-        }
-
-        await resetarLista();
-        let encontrou = false;
-
-        while (true) {
-            if (abortarVarreduraAtual) return;
-            const linhas = document.querySelectorAll('tr[data-cy="entityTable"]');
-            for (const linha of linhas) {
-                const span = linha.querySelector("td.td-clickable span") || linha.querySelector("span");
-                if (!span) continue;
-
-                if (span.innerText.trim() === nome) {
-                    // Tenta o clique de forma assistida até 3 vezes caso o sistema falhe
-                    for(let tentativa=0; tentativa<3; tentativa++) {
-                        const alvo = linha.querySelector("td.td-clickable") || span;
-                        if (alvo) {
-                            alvo.click();
-                            telaProcessosAberta = true;
-                            break;
-                        }
-                        await esperar(300);
-                    }
-                    encontrou = true;
-                    break;
-                }
-            }
-            if (encontrou) {
-                await esperar(2400); // Tempo seguro para renderizar
-                return;
-            }
-
-            const next = document.querySelector('[aria-label="Página Seguinte"]');
-            if (!next || next.disabled || next.getAttribute('aria-disabled') === 'true') break;
-            next.click();
-            await esperar(1600);
-        }
-    }
-
-    async function abrirServidor(nome) {
-        if (!estamosNaTelaDeServidores()) {
-            await garantirRetornoParaRaiz();
-        }
-        await abrirServidorParaVarredura(nome);
-    }
-
-    async function resetarLista() {
-        const first = document.querySelector('[aria-label="Primeira Página"]');
-        if (first && !first.disabled && first.getAttribute('aria-disabled') !== 'true') {
-            first.click();
-            await esperar(1800);
-        }
-    }
-
-    function criarFiltro() {
-        if (document.getElementById("simapEquipe")) return;
-
-        const container = document.createElement("div");
-        container.style.cssText = `
-            position:fixed; top:10px; left:180px; z-index:9999;
-            background:#fff; padding:5px 10px; border:1px solid #ccc;
-            border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,.15);
-            display: flex; align-items: center; height: 32px; gap: 6px;
-        `;
-
-        const select = document.createElement("select");
-        select.id = "simapEquipe";
-        select.style.cssText = "padding: 2px; font-size: 13px; cursor: pointer;";
-
-        Object.keys(equipes).forEach(e => {
-            const opt = document.createElement("option");
-            opt.value = e;
-            opt.textContent = e;
-            select.appendChild(opt);
-        });
-
-        const btnCarregar = document.createElement("button");
-        btnCarregar.innerText = "📊 Carregar";
-        btnCarregar.style.cssText = "padding: 3px 8px; cursor: pointer; font-weight: bold; font-size: 13px;";
-        btnCarregar.onclick = carregarEquipe;
-
-        const btnGlobalPause = document.createElement("button");
-        btnGlobalPause.id = "btnGlobalPause";
-        btnGlobalPause.innerText = "⏸️";
-        btnGlobalPause.disabled = true;
-        btnGlobalPause.style.cssText = "padding: 3px 10px; cursor: pointer; font-weight: bold; font-size: 13px; border-radius: 4px; border:1px solid #ccc; background:#e9ecef; color:#333;";
-        btnGlobalPause.onclick = alternarPausaGlobal;
-
-        const btnInicio = document.createElement("button");
-        btnInicio.id = "btnIrInicioPlanilha";
-        btnInicio.innerText = "🏠 Voltar página inicial da planilha";
-        btnInicio.style.cssText = "padding: 3px 8px; cursor: pointer; font-weight: bold; font-size: 13px; background: #e9ecef; border: 1px solid #ced4da; border-radius: 4px;";
-        btnInicio.onclick = async function() {
-            this.innerText = "⏳ Voltando para Pág 1...";
-            await garantirRetornoParaRaiz();
-            this.innerText = "🏠 Voltar página inicial da planilha";
-        };
-
-        container.appendChild(select);
-        container.appendChild(btnCarregar);
-        container.appendChild(btnGlobalPause);
-        container.appendChild(btnInicio);
-        document.body.appendChild(container);
-    }
-
-    function criarPainel() {
-        if (document.getElementById("resultadoEquipe")) return;
-
+    // Cria um pequeno indicador visual de que a extensão está carregada
+    function mostrarAvisoCarregamento() {
         const div = document.createElement("div");
-        div.id = "resultadoEquipe";
-        div.style.cssText = `
-            position:fixed; top:75px; left:20px; width:950px;
-            max-height:600px; overflow:auto; background:#fff;
-            border:1px solid #ccc; padding:10px; z-index:9999;
-            border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.2);
-            display:none;
-        `;
+        div.style.cssText = "position: fixed; bottom: 15px; right: 15px; background: #6366f1; color: #fff; padding: 8px 12px; border-radius: 6px; font-family: sans-serif; font-size: 12px; font-weight: bold; z-index: 99999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); transition: opacity 0.5s;";
+        div.textContent = "😸 Tontom Gestores Ativo";
         document.body.appendChild(div);
+        setTimeout(() => {
+            div.style.opacity = "0";
+            setTimeout(() => div.remove(), 500);
+        }, 3000);
     }
 
-carregarDadosPlanilha();
+    // ==========================================
+    // PARTE 1: LÓGICA DO MENU DE OBSERVAÇÕES
+    // ==========================================
 
-const observer = new MutationObserver(() => {
-    aplicarTagsNaTela();
-});
+    const opcoesPadrao = [
+        { display: "SUPERVISÃO/DÚVIDA (campo aberto)", prefixo: "SUPERVISÃO/DÚVIDA", precisaExtra: true, labelExtra: "Digite o motivo ou a dúvida:", rotuloExtra: "Detalhe" },
+        { display: "*SERVIDOR (campo aberto)", prefixo: "*SERVIDOR", precisaExtra: true, labelExtra: "Digite o lembrete/observação interna:", rotuloExtra: "Lembrete" },
+        { display: "*SISCONDJ (Alvará gravado)", prefixo: "*SISCONDJ (Alvará gravado)", precisaExtra: false },
+        { display: "*SISCONDJ (Vinculação de Conta)", prefixo: "*SISCONDJ (Vinculação de Conta)", precisaExtra: false },
+        { display: "*PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", prefixo: "*PRAZO ABERTO FORA DO SISTEMA", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PRAZO EM CURSO NO SISTEMA", prefixo: "*PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
+        { display: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", prefixo: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação Conexa:", rotuloExtra: "Nº" },
+        { display: "*PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", prefixo: "*PROCESSO SUSPENSO (Determinação judicial)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PROCESSO SUSPENSO (Data de Retorno)", prefixo: "*PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", prefixo: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
+        { display: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", prefixo: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência)", precisaExtra: true, labelExtra: "Informe o Nº do processo:", rotuloExtra: "Nº" },
+        { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
+        { display: "*ERRO DE FLUXO (Nº do Chamado)", prefixo: "*ERRO DE FLUXO", precisaExtra: true, labelExtra: "Informe o Nº do Chamado:", rotuloExtra: "Chamado" },
+        { display: "*LEILÃO", prefixo: "*LEILÃO", precisaExtra: false },
+        { display: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", prefixo: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
+        { display: "*PRECATÓRIO/RPV", prefixo: "*PRECATÓRIO/RPV", precisaExtra: false },
+        { display: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", prefixo: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", precisaExtra: false },
+        { display: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", prefixo: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false }
+    ];
 
-observer.observe(document.body, {
-    childList: true,
-    subtree: true
-});
+    let textoPrevioAoSelect = "";
 
-setInterval(() => {
-    const rows = document.querySelectorAll('tr[data-cy="entityTable"]');
+    function injetarMenuFlutuante() {
+        const txtAreaOriginal = document.getElementById('field_observacao');
+        if (!txtAreaOriginal || document.getElementById('containerMenuTontom')) return;
 
-    if (rows.length > 0) {
-        criarFiltro();
-        criarPainel();
+        const container = document.createElement('div');
+        container.id = 'containerMenuTontom';
+        container.style.cssText = 'margin-bottom: 12px; padding: 10px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; font-family: sans-serif;';
+
+        const label = document.createElement('label');
+        label.innerText = '📋 Selecione a Observação Padronizada:';
+        label.style.cssText = 'display: block; font-weight: bold; font-size: 13px; margin-bottom: 5px; color: #495057;';
+        container.appendChild(label);
+
+        const select = document.createElement('select');
+        select.id = 'selectObsTontom';
+        select.style.cssText = 'width: 100%; padding: 6px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; background-color: #fff; cursor: pointer;';
+
+        const optDefault = document.createElement('option');
+        optDefault.value = '';
+        optDefault.innerText = '-- Escolha uma opção (Opcional) --';
+        select.appendChild(optDefault);
+
+        opcoesPadrao.forEach((opt, index) => {
+            const o = document.createElement('option');
+            o.value = index;
+            o.innerText = opt.display;
+            select.appendChild(o);
+        });
+        container.appendChild(select);
+
+        const divExtra = document.createElement('div');
+        divExtra.id = 'divExtraTontom';
+        divExtra.style.cssText = 'display: none; margin-top: 8px;';
+
+        const labelExtra = document.createElement('label');
+        labelExtra.id = 'labelExtraTontom';
+        labelExtra.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
+
+        const inputExtra = document.createElement('input');
+        inputExtra.id = 'inputExtraTontom';
+        inputExtra.type = 'text';
+        inputExtra.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;';
+
+        divExtra.appendChild(labelExtra);
+        divExtra.appendChild(inputExtra);
+        container.appendChild(divExtra);
+
+        txtAreaOriginal.parentNode.insertBefore(container, txtAreaOriginal);
+
+        // --- Sincronização do Checkbox de Notificação (Tontom) ---
+        function obterCheckboxNotificar() {
+            const labels = Array.from(document.querySelectorAll('label, span, div'));
+            const labelNotif = labels.find(el => el.innerText && el.innerText.trim().includes('Notificar Supervisão/Servidor'));
+            if (labelNotif) {
+                const pCheckbox = labelNotif.closest('p-checkbox');
+                if (pCheckbox) {
+                    return pCheckbox.querySelector('input[type="checkbox"]') || pCheckbox;
+                }
+                const parent = labelNotif.parentElement;
+                if (parent) {
+                    return parent.querySelector('input[type="checkbox"]') || parent.querySelector('.p-checkbox-box') || parent;
+                }
+            }
+            return document.querySelector('p-checkbox input[type="checkbox"]') || document.querySelector('input[type="checkbox"]');
+        }
+
+        function isCheckboxChecked(chk) {
+            if (!chk) return false;
+            if (chk.tagName === 'INPUT') {
+                return chk.checked;
+            }
+            const box = chk.querySelector('.p-checkbox-box') || chk;
+            return box.classList.contains('p-highlight') || box.getAttribute('aria-checked') === 'true' || chk.checked;
+        }
+
+        function setCheckboxChecked(chk, state) {
+            if (!chk) return;
+            const input = chk.tagName === 'INPUT' ? chk : chk.querySelector('input[type="checkbox"]');
+            if (input) {
+                if (input.checked !== state) {
+                    input.click();
+                }
+            } else {
+                const box = chk.querySelector('.p-checkbox-box') || chk;
+                const isCurrentlyChecked = box.classList.contains('p-highlight') || box.getAttribute('aria-checked') === 'true';
+                if (isCurrentlyChecked !== state) {
+                    box.click();
+                }
+            }
+        }
+
+        // Inicialização: Se a observação já possui a tag [NOTIFICADO] salva no texto
+        setTimeout(() => {
+            const chk = obterCheckboxNotificar();
+            let texto = txtAreaOriginal.value;
+            if (texto.includes('[NOTIFICADO]')) {
+                setCheckboxChecked(chk, true);
+                txtAreaOriginal.value = texto.replace(/[\s]*\[NOTIFICADO\]/g, '').trim();
+                dispararEventos(txtAreaOriginal);
+            }
+        }, 400);
+
+        // Intercepta o clique no botão Salvar para embutir [NOTIFICADO] se marcado
+        const btnSalvar = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('Salvar') || btn.textContent.includes('Salvar'));
+        if (btnSalvar) {
+            btnSalvar.addEventListener('click', function(e) {
+                const chk = obterCheckboxNotificar();
+                const isChecked = isCheckboxChecked(chk);
+                let texto = txtAreaOriginal.value.trim();
+
+                texto = texto.replace(/[\s]*\[NOTIFICADO\]/g, '').trim();
+                if (isChecked) {
+                    txtAreaOriginal.value = (texto + " [NOTIFICADO]").trim();
+                } else {
+                    txtAreaOriginal.value = texto;
+                }
+                dispararEventos(txtAreaOriginal);
+            }, true); // Capturando (executa antes dos listeners de bubbling do Angular)
+        }
+
+        select.addEventListener('change', function() {
+            const idx = this.value;
+            if (idx === '') {
+                divExtra.style.display = 'none';
+                inputExtra.value = '';
+                return;
+            }
+
+            const opcaoSelecionada = opcoesPadrao[idx];
+            textoPrevioAoSelect = txtAreaOriginal.value.trim();
+
+            if (opcaoSelecionada.precisaExtra) {
+                labelExtra.innerText = opcaoSelecionada.labelExtra;
+                divExtra.style.display = 'block';
+                inputExtra.value = '';
+                inputExtra.focus();
+
+                acumularTextoOficial(opcaoSelecionada.prefixo);
+            } else {
+                divExtra.style.display = 'none';
+                inputExtra.value = '';
+
+                const textoFinal = opcaoSelecionada.cleanText || opcaoSelecionada.prefixo;
+                acumularTextoOficial(textoFinal);
+                select.value = '';
+            }
+        });
+
+        inputExtra.addEventListener('input', function() {
+            const idx = select.value;
+            if (idx === '') return;
+
+            const opcaoSelecionada = opcoesPadrao[idx];
+            const infoAdicional = this.value.trim();
+            const textoTermo = infoAdicional ? `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${infoAdicional}` : opcaoSelecionada.prefixo;
+
+            substituirTextoTemporario(textoTermo);
+        });
+
+        inputExtra.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                select.value = '';
+                divExtra.style.display = 'none';
+                inputExtra.value = '';
+                txtAreaOriginal.focus();
+            }
+        });
     }
 
-    aplicarTagsNaTela();
-    injetarMenuFlutuante();
+    function acumularTextoOficial(novoTexto) {
+        const txtAreaOriginal = document.getElementById('field_observacao');
+        if (!txtAreaOriginal) return;
 
-}, 1500);
+        if (textoPrevioAoSelect.length > 0) {
+            txtAreaOriginal.value = textoPrevioAoSelect + "\n" + novoTexto;
+        } else {
+            txtAreaOriginal.value = novoTexto;
+        }
+
+        dispararEventos(txtAreaOriginal);
+    }
+
+    // Substitui o texto com o valor do campo adicional
+    function substituirTextoTemporario(novoTexto) {
+        const txtAreaOriginal = document.getElementById('field_observacao');
+        if (!txtAreaOriginal) return;
+
+        if (textoPrevioAoSelect.length > 0) {
+            txtAreaOriginal.value = textoPrevioAoSelect + "\n" + novoTexto;
+        } else {
+            txtAreaOriginal.value = novoTexto;
+        }
+
+        dispararEventos(txtAreaOriginal);
+    }
+
+    function dispararEventos(elemento) {
+        elemento.dispatchEvent(new Event('input', { bubbles: true }));
+        elemento.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    // ==========================================
+    // PARTE 2: LEITURA E INJEÇÃO DAS TAGS DE PRIORIDADE
+    // ==========================================
+
     function extrairIdEAbas(url) {
         const idMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
         const gidMatch = url.match(/[#&?]gid=(\d+)/);
@@ -681,18 +327,33 @@ setInterval(() => {
 
     function extrairPrioridade(textoCelula) {
         if (!textoCelula) return null;
-        const m = String(textoCelula).trim().match(/^(\d+)/);
-        if (!m) return null;
-        const n = parseInt(m[1], 10);
-        return (n >= 1 && n <= 9) ? n : null;
+        const clean = String(textoCelula).trim();
+
+        // 1. Tenta número (com ou sem decimal) no início da célula (ex: "1", "1.1", "2 - (+20 dias)")
+        let m = clean.match(/^\s*(\d+(?:[.,]\d+)?)/);
+        if (m) {
+            const valorStr = m[1].replace(',', '.');
+            const base = parseInt(valorStr, 10);
+            if (base >= 1 && base <= 11) return valorStr;
+        }
+
+        // 2. Tenta padrões com prefixos comuns (ex: "P1", "P 1.1", "Origem 2", "Prioridade 4")
+        m = clean.match(/(?:P|p|Origem|Prioridade)\s*(\d+(?:[.,]\d+)?)/i);
+        if (m) {
+            const valorStr = m[1].replace(',', '.');
+            const base = parseInt(valorStr, 10);
+            if (base >= 1 && base <= 11) return valorStr;
+        }
+        return null;
     }
 
     function processarDadosPlanilha(linhasCsv) {
         if (linhasCsv.length < 2) return;
         let headerIdx = -1;
         for (let i = 0; i < Math.min(5, linhasCsv.length); i++) {
+            if (!linhasCsv[i] || !Array.isArray(linhasCsv[i])) continue;
             const row = linhasCsv[i].map(h => String(h ?? "").toUpperCase().trim());
-            if (row.some(h => h === "NPU" || h.includes("PROCESSO"))) {
+            if (row.some(h => h === "NPU" || h.includes("PROCESSO") || h.includes("NUMERO"))) {
                 headerIdx = i;
                 break;
             }
@@ -700,24 +361,40 @@ setInterval(() => {
         if (headerIdx < 0) headerIdx = 0;
         const header = linhasCsv[headerIdx].map(h => String(h ?? "").toUpperCase().trim());
         const dados = linhasCsv.slice(headerIdx + 1);
-        const idxNPU = header.findIndex(h => h.includes("PROCESSO") || h === "NPU");
-        const idxTipo = header.findIndex(h => h.includes("TIPO") && h.includes("ATEND"));
+        const idxNPU = header.findIndex(h => h === "NPU" || h.includes("PROCESSO") || h.includes("NUMERO"));
+        let idxTipo = header.findIndex(h => h === "ORIGEM" || h === "ORIGENS" || h.includes("TIPO") || h === "PRIORIDADE" || h === "PRIO");
+        const idxData = header.findIndex(h => h.includes("DATA") || h.includes("INCLU") || h.includes("ENTRAD") || h.includes("DISTRIB"));
+
+        if (idxTipo < 0) {
+            idxTipo = header.findIndex(h => h.includes("ORIGEM") || h.includes("PRIO"));
+        }
+
+        BANCO_PRIORIDADES.clear();
+
         dados.forEach(row => {
             const npuBruto = row[idxNPU >= 0 ? idxNPU : 0];
             const npuChave = limparNPU(npuBruto);
-            if (npuChave.length !== 20) return;
+            if (npuChave.length < 8) return;
+            const chaveCurta = npuChave.substring(0, 8); // Chave curta de 8 dígitos
+
             let prioridadeIdentificada = 1;
             if (idxTipo >= 0) {
                 prioridadeIdentificada = extrairPrioridade(row[idxTipo]) || 1;
             } else {
                 for (let i = 0; i < row.length; i++) {
-                    if (i === idxNPU) continue;
+                    if (i === idxNPU || i === idxData) continue;
                     const p = extrairPrioridade(row[i]);
                     if (p) { prioridadeIdentificada = p; break; }
                 }
             }
-            BANCO_PRIORIDADES.set(npuChave, prioridadeIdentificada);
+            const dataStr = idxData >= 0 ? row[idxData] : null;
+            BANCO_PRIORIDADES.set(chaveCurta, {
+                prioridade: prioridadeIdentificada,
+                data: dataStr
+            });
         });
+
+        console.log("😸 [Tontom] Planilha carregada. Itens no banco de prioridades:", BANCO_PRIORIDADES.size);
         aplicarTagsNaTela();
     }
 
@@ -725,23 +402,47 @@ setInterval(() => {
         const { id, gid } = extrairIdEAbas(URL_PLANILHA);
         if (!id) return;
         const csvUrl = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`;
-        GM_xmlhttpRequest({
-            method: "GET",
-            url: csvUrl,
-            onload: function(response) {
-                if (response.status === 200) {
-                    const matriz = parsearCSV(response.responseText);
-                    processarDadosPlanilha(matriz);
-                }
-            }
-        });
+
+        // Tenta baixar com fetch comum primeiro
+        fetch(csvUrl)
+            .then(res => {
+                if (res.ok) return res.text();
+                throw new Error("Erro de requisição");
+            })
+            .then(text => {
+                const matriz = parsearCSV(text);
+                processarDadosPlanilha(matriz);
+            })
+            .catch(err => {
+                console.log("😸 [Tontom] Fetch direto falhou (CORS/Offline). Tentando GM_xmlhttpRequest...", err);
+
+                // Fallback para GM_xmlhttpRequest
+                GM_xmlhttpRequest({
+                    method: "GET",
+                    url: csvUrl,
+                    onload: function(response) {
+                        if (response.status === 200) {
+                            const matriz = parsearCSV(response.responseText);
+                            processarDadosPlanilha(matriz);
+                        } else {
+                            console.error("😸 [Tontom] GM_xmlhttpRequest falhou:", response.status);
+                        }
+                    },
+                    onerror: function(err) {
+                        console.error("😸 [Tontom] GM_xmlhttpRequest erro:", err);
+                    }
+                });
+            });
     }
 
     function aplicarTagsNaTela() {
         if (BANCO_PRIORIDADES.size === 0) return;
-        const regexNPU = /\b\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}\b/g;
+        // Regex mais abrangente para pegar tanto NPUs curtos (como 0014040-6) quanto longos (0014040-62.2019.8.17.2001)
+        const regexNPU = /\b\d{7}[-.]?\d{1,2}([-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4})?\b/g;
         const elementos = document.querySelectorAll("td, span, a, div.ui-outputpanel");
         elementos.forEach(el => {
+            if (el.closest('#containerMenuTontom')) return;
+
             if (el.querySelector(".tag-prioridade") || el.classList.contains("tag-prioridade")) return;
             if (el.childNodes.length > 0) {
                 for (let node of el.childNodes) {
@@ -750,12 +451,17 @@ setInterval(() => {
                         if (correspondencias) {
                             correspondencias.forEach(npuMatch => {
                                 const chave = limparNPU(npuMatch);
-                                if (BANCO_PRIORIDADES.has(chave)) {
-                                    const p = BANCO_PRIORIDADES.get(chave);
+                                if (chave.length < 8) return;
+                                const chaveCurta = chave.substring(0, 8); // Matching por prefixo de 8 dígitos
+
+                                if (BANCO_PRIORIDADES.has(chaveCurta)) {
+                                    const p = BANCO_PRIORIDADES.get(chaveCurta);
+                                    const pValue = typeof p === 'object' ? p.prioridade : p;
+                                    const basePrio = parseInt(pValue, 10) || 9;
                                     const tag = document.createElement("span");
-                                    tag.className = `tag-prioridade prio-p${p}`;
-                                    tag.textContent = `P${p}`;
-                                    tag.title = `Prioridade Nível P${p}`;
+                                    tag.className = `tag-prioridade prio-p${basePrio}`;
+                                    tag.textContent = `P${pValue}`;
+                                    tag.title = `Prioridade Nível P${pValue}`;
                                     el.appendChild(tag);
                                 }
                             });
@@ -766,160 +472,409 @@ setInterval(() => {
         });
     }
 
+    // Inicialização
+    mostrarAvisoCarregamento();
+    carregarDadosPlanilha();
+
+    const observer = new MutationObserver((mutations) => {
+        const apenasNossaObs = mutations.every(m => m.target.closest('#containerMenuTontom'));
+        if (apenasNossaObs) return;
+
+        aplicarTagsNaTela();
+        injetarMenuFlutuante();
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+
+    setInterval(() => {
+        aplicarTagsNaTela();
+        injetarMenuFlutuante();
+    }, 1500);
+
     // ==========================================
-    // PARTE 2: LÓGICA DO MENU DE OBSERVAÇÕES
+    // PARTE 3: BOTÃO FLUTUANTE "COLAR NPU E BUSCAR" + VISUAL DEBUGGER LOGS
     // ==========================================
 
-    const opcoesPadrao = [
-        { texto: "DÚVIDA (campo aberto)", precisaExtra: true, labelExtra: "Digite a dúvida:" },
-        { texto: "SUPERVISÃO (campo aberto)", precisaExtra: true, labelExtra: "Digite o motivo da supervisão:" },
-        { texto: "SISCONDJ (Alvará gravado OU Vinculação de Conta)", precisaExtra: false },
-        { texto: "PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
-        { texto: "PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação:" },
-        { texto: "PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
-        { texto: "PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", precisaExtra: true, labelExtra: "Informe o Nº do processo:" },
-        { texto: "ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", precisaExtra: true, labelExtra: "Informe a Data ou Motivo:" },
-        { texto: "ERRO DE FLUXO (Nº do Chamado)", precisaExtra: true, labelExtra: "Informe o Nº do Chamado:" },
-        { texto: "LEILÃO", precisaExtra: false },
-        { texto: "REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
-        { texto: "PRECATÓRIO/RPV", precisaExtra: false },
-        { texto: "CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", precisaExtra: false },
-        { texto: "INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false }
-    ];
+    // Função para mostrar logs visuais na tela
+    function mostrarLogVisual(msg, cor = '#1a73e8') {
+        let box = document.getElementById('tontomLogVisual');
+        if (!box) {
+            box = document.createElement('div');
+            box.id = 'tontomLogVisual';
+            box.style.cssText = `
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                background: rgba(0,0,0,0.85);
+                color: #fff;
+                padding: 15px 20px;
+                border-radius: 8px;
+                font-family: sans-serif;
+                font-size: 13px;
+                z-index: 100000;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+                max-width: 300px;
+                border-left: 5px solid ${cor};
+                transition: all 0.3s ease;
+            `;
+            document.body.appendChild(box);
+        }
+        box.style.borderLeftColor = cor;
+        box.innerHTML = `<div style="font-weight:bold; margin-bottom:5px; color:${cor}">😸 Tontom Status:</div><div>${msg}</div>`;
 
-    let textoPrevioAoSelect = "";
+        // Remove após 5 segundos se for mensagem de sucesso ou erro final
+        if (cor !== '#1a73e8' && cor !== '#e65100') { // se for verde ou vermelho
+            setTimeout(() => {
+                if (box && box.parentNode) box.remove();
+            }, 5000);
+        }
+    }
 
-    function injetarMenuFlutuante() {
-        const txtAreaOriginal = document.getElementById('field_observacao');
-        if (!txtAreaOriginal || document.getElementById('containerMenuTontom')) return;
+    // Helper: Localizar o input NPU no DOM
+    function localizarInputNPU() {
+        const inputs = Array.from(document.querySelectorAll('input'));
 
-        const container = document.createElement('div');
-        container.id = 'containerMenuTontom';
-        container.style.cssText = 'margin-bottom: 12px; padding: 10px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; font-family: sans-serif;';
+        // Método A: Busca direta por atributos do input
+        for (const input of inputs) {
+            const id = String(input.id || "").toLowerCase();
+            const name = String(input.name || "").toLowerCase();
+            const placeholder = String(input.placeholder || "").toLowerCase();
+            const ariaLabel = String(input.getAttribute("aria-label") || "").toLowerCase();
 
-        const label = document.createElement('label');
-        label.innerText = '📋 Selecione a Observação Padronizada:';
-        label.style.cssText = 'display: block; font-weight: bold; font-size: 13px; margin-bottom: 5px; color: #495057;';
-        container.appendChild(label);
+            if (id.includes("npu") || id.includes("processo") ||
+                name.includes("npu") || name.includes("processo") ||
+                placeholder.includes("npu") || placeholder.includes("processo") ||
+                ariaLabel.includes("npu") || ariaLabel.includes("processo")) {
+                if (input.offsetParent !== null || input.offsetWidth > 0) return input;
+            }
+        }
 
-        const select = document.createElement('select');
-        select.id = 'selectObsTontom';
-        select.style.cssText = 'width: 100%; padding: 6px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; background-color: #fff; cursor: pointer;';
+        // Método B: Busca pelo texto do label associado
+        const labels = Array.from(document.querySelectorAll('label, mat-label, span, mat-placeholder, p'));
+        for (const lbl of labels) {
+            const text = String(lbl.innerText || lbl.textContent || "").trim().toUpperCase();
+            if (text === "NPU" || text === "NPU:" || text === "PROCESSO" || text === "PROCESSO:" || text === "Nº PROCESSO" || text === "N° DO PROCESSO") {
+                const forAttr = lbl.getAttribute('for');
+                if (forAttr) {
+                    const inp = document.getElementById(forAttr);
+                    if (inp && (inp.offsetParent !== null || inp.offsetWidth > 0)) return inp;
+                }
 
-        const optDefault = document.createElement('option');
-        optDefault.value = '';
-        optDefault.innerText = '-- Escolha uma opção (Opcional) --';
-        select.appendChild(optDefault);
+                // Procura inputs próximos subindo a árvore
+                let container = lbl.parentElement;
+                for (let d = 0; d < 5; d++) {
+                    if (!container || container.tagName === 'BODY') break;
+                    const found = container.querySelector('input:not([type="hidden"])');
+                    if (found && (found.offsetParent !== null || found.offsetWidth > 0)) return found;
+                    container = container.parentElement;
+                }
+            }
+        }
 
-        opcoesPadrao.forEach((opt, index) => {
-            const o = document.createElement('option');
-            o.value = index;
-            o.innerText = opt.texto;
-            select.appendChild(o);
-        });
-        container.appendChild(select);
+        // Método C: Se houver apenas um input visível na tela inteira
+        const visibleInputs = inputs.filter(inp => inp.type !== "hidden" && (inp.offsetParent !== null || inp.offsetWidth > 0));
+        if (visibleInputs.length === 1) {
+            return visibleInputs[0];
+        }
 
-        const divExtra = document.createElement('div');
-        divExtra.id = 'divExtraTontom';
-        divExtra.style.cssText = 'display: none; margin-top: 8px;';
+        return null;
+    }
 
-        const labelExtra = document.createElement('label');
-        labelExtra.id = 'labelExtraTontom';
-        labelExtra.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
+    // Helper: Preencher input de forma compatível com Angular/React framework
+    function preencherInputAngular(input, valor) {
+        input.focus();
+        try {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            setter.call(input, valor);
+        } catch(e) {
+            input.value = valor;
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        input.value = valor;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
 
-        const inputExtra = document.createElement('input');
-        inputExtra.id = 'inputExtraTontom';
-        inputExtra.type = 'text';
-        inputExtra.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;';
+    // Helper: Expandir filtros e preencher NPU
+    function expandirFiltrosEBuscar(npu) {
+        mostrarLogVisual("Iniciando busca automática do NPU " + npu, "#1a73e8");
 
-        divExtra.appendChild(labelExtra);
-        divExtra.appendChild(inputExtra);
-        container.appendChild(divExtra);
+        let fase1Count = 0;
+        let filtroClicado = false;
 
-        txtAreaOriginal.parentNode.insertBefore(container, txtAreaOriginal);
+        const fase1 = setInterval(() => {
+            fase1Count++;
 
-        select.addEventListener('change', function() {
-            const idx = this.value;
-            if (idx === '') {
-                divExtra.style.display = 'none';
-                inputExtra.value = '';
+            // Timeout após ~10 segundos (33 * 300ms)
+            if (fase1Count > 33) {
+                clearInterval(fase1);
+
+                // DIAGNÓSTICO: Coleta todos os inputs da tela para ajudar a descobrir o problema
+                const inputsEncontrados = Array.from(document.querySelectorAll('input')).map(inp => {
+                    return `[ID:${inp.id || 'sem-id'} | PlaceH:${inp.placeholder || 'sem-plh'} | Vis:${inp.offsetParent !== null}]`;
+                }).slice(0, 5).join('<br>');
+
+                mostrarLogVisual(
+                    `Tempo esgotado.<br><b>Inputs na tela:</b><br>${inputsEncontrados || 'Nenhum input encontrado'}`,
+                    "#e53935"
+                );
                 return;
             }
 
-            const opcaoSelecionada = opcoesPadrao[idx];
-            textoPrevioAoSelect = txtAreaOriginal.value.trim();
+            // Verifica se o input já apareceu
+            const inputExistente = localizarInputNPU();
+            if (inputExistente) {
+                clearInterval(fase1);
+                mostrarLogVisual("Input NPU localizado! Preenchendo dados...", "#1a73e8");
+                preencherInputAngular(inputExistente, npu);
 
-            if (opcaoSelecionada.precisaExtra) {
-                labelExtra.innerText = opcaoSelecionada.labelExtra;
-                divExtra.style.display = 'block';
-                inputExtra.value = '';
-                inputExtra.focus();
-
-                acumularTextoOficial(opcaoSelecionada.texto);
-            } else {
-                divExtra.style.display = 'none';
-                inputExtra.value = '';
-
-                acumularTextoOficial(opcaoSelecionada.texto);
-                select.value = '';
+                // Vai para a fase de clicar em pesquisar
+                setTimeout(() => clicarPesquisar(inputExistente), 600);
+                return;
             }
-        });
 
-        inputExtra.addEventListener('input', function() {
-            const idx = select.value;
-            if (idx === '') return;
+            // Se ainda não achou o input e ainda não clicou em Filtros, clica uma vez
+            if (!filtroClicado) {
+                mostrarLogVisual("Painel de filtros fechado. Tentando abrir...", "#f57c00");
 
-            const opcaoSelecionada = opcoesPadrao[idx];
-            const infoAdicional = this.value.trim();
-            const textoTermo = infoAdicional ? `${opcaoSelecionada.texto} - ${infoAdicional}` : opcaoSelecionada.texto;
+                // Busca ampla por botões ou clickables que contenham "filtro" no texto
+                const clickables = Array.from(document.querySelectorAll('button, a, [role="button"], .mat-focus-indicator, .btn'));
+                const btnFiltro = clickables.find(el => {
+                    const text = String(el.innerText || el.textContent || "").trim().toLowerCase();
+                    return text.includes("filtro");
+                });
 
-            substituirTextoTemporario(textoTermo);
-        });
+                if (btnFiltro) {
+                    filtroClicado = true;
 
-        inputExtra.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                select.value = '';
-                divExtra.style.display = 'none';
-                inputExtra.value = '';
-                txtAreaOriginal.focus();
+                    // Sobe na árvore DOM para achar o botão real mais próximo
+                    let alvo = btnFiltro;
+                    let p = btnFiltro;
+                    for (let i = 0; i < 5; i++) {
+                        p = p.parentElement;
+                        if (!p || p.tagName === 'BODY') break;
+                        if (p.tagName === 'BUTTON' || p.tagName === 'A' || p.getAttribute('role') === 'button') {
+                            alvo = p;
+                            break;
+                        }
+                    }
+
+                    // Clica no botão
+                    if (alvo !== btnFiltro) {
+                        alvo.click();
+                    } else {
+                        btnFiltro.click();
+                    }
+                    mostrarLogVisual("Botão Filtros clicado! Aguardando renderização...", "#f57c00");
+                } else {
+                    mostrarLogVisual("Procurando botão Filtros na tela...", "#f57c00");
+                }
             }
-        });
+        }, 300);
     }
 
-    function acumularTextoOficial(novoTexto) {
-        const txtAreaOriginal = document.getElementById('field_observacao');
-        if (!txtAreaOriginal) return;
+    // Helper: Clicar no botão Pesquisar
+    function clicarPesquisar(inputRef) {
+        mostrarLogVisual("Preenchido! Procurando botão Pesquisar...", "#1a73e8");
+        let count = 0;
 
-        if (textoPrevioAoSelect.length > 0) {
-            txtAreaOriginal.value = textoPrevioAoSelect + "\n" + novoTexto;
-        } else {
-            txtAreaOriginal.value = novoTexto;
+        const interval = setInterval(() => {
+            count++;
+            if (count > 15) {
+                clearInterval(interval);
+                // Fallback: tenta submeter o formulário
+                const form = inputRef ? inputRef.closest('form') : null;
+                if (form) {
+                    mostrarLogVisual("Submetendo formulário como fallback...", "#f57c00");
+                    form.submit();
+                } else {
+                    mostrarLogVisual("Não foi possível encontrar o botão de pesquisar.", "#e53935");
+                }
+                return;
+            }
+
+            const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a, [role="button"]'));
+            for (const btn of buttons) {
+                const t = String(btn.innerText || btn.textContent || btn.value || "").trim().toLowerCase();
+                const cls = String(btn.className || "").toLowerCase();
+                const id = String(btn.id || "").toLowerCase();
+
+                // Verifica texto comum de pesquisa OU classe/id que contenha termos de busca
+                const matchesText = t.includes("pesquisar") || t.includes("buscar") || t.includes("filtrar") || t === "consultar" || t === "ok";
+                const matchesClass = cls.includes("search") || cls.includes("find") || cls.includes("lupa") || cls.includes("filtrar");
+                const matchesId = id.includes("search") || id.includes("find") || id.includes("buscar");
+
+                if ((matchesText || matchesClass || matchesId) && (btn.offsetParent !== null || btn.offsetWidth > 0)) {
+                    clearInterval(interval);
+                    mostrarLogVisual("Botão Pesquisar encontrado! Executando busca...", "#2e7d32");
+                    btn.click();
+                    return;
+                }
+            }
+        }, 250);
+    }
+
+    // ---- BOTÃO FLUTUANTE "COLAR NPU E BUSCAR" ----
+    function criarBotaoColaNPU() {
+        if (document.getElementById('tontomBtnColaNPU')) return;
+
+        const btn = document.createElement('div');
+        btn.id = 'tontomBtnColaNPU';
+        btn.innerHTML = '📋 Colar NPU e Buscar';
+        btn.title = 'Cole o NPU da área de transferência, preencha automaticamente e busque no SIMAP (Arraste para mover)';
+        btn.style.cssText = `
+            position: fixed;
+            bottom: 80px;
+            right: 20px;
+            background: linear-gradient(135deg, #1a73e8, #0d47a1);
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            z-index: 99999;
+            user-select: none;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        `;
+
+        // Aplica posição salva se existir
+        const salvoTop = localStorage.getItem('tontomBtnColaNPU_top');
+        const salvoLeft = localStorage.getItem('tontomBtnColaNPU_left');
+        if (salvoTop && salvoLeft) {
+            btn.style.bottom = 'auto';
+            btn.style.right = 'auto';
+            btn.style.top = salvoTop;
+            btn.style.left = salvoLeft;
         }
 
-        dispararEventos(txtAreaOriginal);
-    }
+        btn.onmouseenter = () => { btn.style.transform = 'scale(1.05)'; btn.style.boxShadow = '0 6px 20px rgba(0,0,0,0.4)'; };
+        btn.onmouseleave = () => { btn.style.transform = 'scale(1)'; btn.style.boxShadow = '0 4px 15px rgba(0,0,0,0.3)'; };
 
-    function substituirTextoTemporario(novoTexto) {
-        const txtAreaOriginal = document.getElementById('field_observacao');
-        if (!txtAreaOriginal) return;
+        // Lógica de arrastar (Drag and Drop)
+        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+        let arrastou = false;
+        let startX = 0, startY = 0;
 
-        if (textoPrevioAoSelect.length > 0) {
-            txtAreaOriginal.value = textoPrevioAoSelect + "\n" + novoTexto;
-        } else {
-            txtAreaOriginal.value = novoTexto;
+        btn.onmousedown = (e) => {
+            if (e.button !== 0) return; // Apenas botão esquerdo do mouse
+            arrastou = false;
+            startX = e.clientX;
+            startY = e.clientY;
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+
+            document.onmouseup = closeDragElement;
+            document.onmousemove = elementDrag;
+            btn.style.cursor = 'grabbing';
+        };
+
+        function elementDrag(e) {
+            e.preventDefault();
+            // Se mover mais do que 6 pixels, ativa flag de arrasto
+            if (Math.abs(e.clientX - startX) > 6 || Math.abs(e.clientY - startY) > 6) {
+                arrastou = true;
+            }
+
+            pos1 = pos3 - e.clientX;
+            pos2 = pos4 - e.clientY;
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+
+            btn.style.bottom = 'auto';
+            btn.style.right = 'auto';
+            btn.style.top = (btn.offsetTop - pos2) + "px";
+            btn.style.left = (btn.offsetLeft - pos1) + "px";
         }
 
-        dispararEventos(txtAreaOriginal);
+        function closeDragElement() {
+            document.onmouseup = null;
+            document.onmousemove = null;
+            btn.style.cursor = 'pointer';
+
+            // Salva a nova posição
+            localStorage.setItem('tontomBtnColaNPU_top', btn.style.top);
+            localStorage.setItem('tontomBtnColaNPU_left', btn.style.left);
+        }
+
+        btn.onclick = async (e) => {
+            if (arrastou) {
+                // Impede o clique de disparar se o botão foi arrastado
+                arrastou = false;
+                return;
+            }
+
+            try {
+                // Tenta ler o clipboard
+                const textoClipboard = await navigator.clipboard.readText();
+                // Limpa o NPU: mantém apenas dígitos, pontos e traços
+                const npuLimpo = textoClipboard.replace(/[^\d.-]/g, '').trim();
+
+                if (!npuLimpo || npuLimpo.length < 5) {
+                    mostrarLogVisual("Área de transferência não contém um NPU válido.", "#e53935");
+                    btn.innerHTML = '❌ NPU inválido';
+                    btn.style.background = 'linear-gradient(135deg, #e53935, #b71c1c)';
+                    setTimeout(() => {
+                        btn.innerHTML = '📋 Colar NPU e Buscar';
+                        btn.style.background = 'linear-gradient(135deg, #1a73e8, #0d47a1)';
+                    }, 2000);
+                    return;
+                }
+
+                btn.innerHTML = '⏳ Buscando...';
+                btn.style.background = 'linear-gradient(135deg, #43a047, #2e7d32)';
+
+                expandirFiltrosEBuscar(npuLimpo);
+
+                setTimeout(() => {
+                    btn.innerHTML = '📋 Colar NPU e Buscar';
+                    btn.style.background = 'linear-gradient(135deg, #1a73e8, #0d47a1)';
+                }, 3000);
+
+            } catch(err) {
+                console.error("😸 [Tontom] Erro ao ler clipboard:", err);
+                mostrarLogVisual("Erro ao ler área de transferência. Dica: Clique na página para dar foco antes de clicar no botão.", "#f57c00");
+                btn.innerHTML = '⚠️ Erro ao colar';
+                btn.style.background = 'linear-gradient(135deg, #f57c00, #e65100)';
+                setTimeout(() => {
+                    btn.innerHTML = '📋 Colar NPU e Buscar';
+                    btn.style.background = 'linear-gradient(135deg, #1a73e8, #0d47a1)';
+                }, 3000);
+            }
+        };
+
+        document.body.appendChild(btn);
     }
 
-    function dispararEventos(elemento) {
-        elemento.dispatchEvent(new Event('input', { bubbles: true }));
-        elemento.dispatchEvent(new Event('change', { bubbles: true }));
+    // Injeta o botão flutuante periodicamente (para SPAs Angular que recarregam o DOM)
+    setInterval(criarBotaoColaNPU, 2000);
+    criarBotaoColaNPU();
+
+    // ---- HASH DETECTION (bônus: funciona quando abre no mesmo Chrome) ----
+    function executarBuscaAutomaticaNPU() {
+        const hash = window.location.hash;
+        if (!hash || !hash.startsWith("#npu=")) return;
+        const npu = hash.replace("#npu=", "").trim();
+        if (!npu) return;
+        setTimeout(() => expandirFiltrosEBuscar(npu), 1500);
     }
 
+    if (window.location.hash.startsWith("#npu=")) {
+        if (document.readyState === "complete") {
+            setTimeout(executarBuscaAutomaticaNPU, 1500);
+        } else {
+            window.addEventListener('load', () => setTimeout(executarBuscaAutomaticaNPU, 2000));
+        }
+    }
+    window.addEventListener('hashchange', executarBuscaAutomaticaNPU);
 
 })();
