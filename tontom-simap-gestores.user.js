@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name          Tontom-Simap - Gestores 
+// @name          Tontom-Simap - Gestores
 // @namespace     simap-tjpe
-// @version      1.7
+// @version      1.8
 // @description   Extensão leve para gestores: injeta tags de prioridade (P1-P9) nos NPUs e exibe o menu flutuante de observações padronizadas na tela de cumprimento de processos.
 // @match         https://simap.svc.tjpe.jus.br/*
 // @match         https://*.tjpe.jus.br/*
@@ -39,6 +39,8 @@
 .prio-p7 { background:#6366f1 !important; }
 .prio-p8 { background:#ec4899 !important; }
 .prio-p9 { background:#64748b !important; }
+.tag-saldo { background:#059669 !important; color:#fff !important; }
+.tag-incon { background:#d97706 !important; color:#fff !important; }
 `);
 
     const BANCO_PRIORIDADES = new Map();
@@ -347,6 +349,20 @@
         return null;
     }
 
+    function extrairTagEspecial(textoCelula) {
+        if (!textoCelula) return null;
+        const str = String(textoCelula).trim();
+        const match = str.match(/(saldo|inconsist[êe]ncias?|incon)(?:\s+plan|\s+planilha)?\s+([a-zà-ú]{3,})\s+(\d{1,2})/i);
+        if (match) {
+            const tipoRaw = match[1].toLowerCase();
+            const tipo = tipoRaw.includes('saldo') ? 'Saldo' : 'INCON';
+            const mes = match[2].substring(0, 3).toUpperCase();
+            const num = String(match[3]).padStart(2, '0');
+            return `${tipo} ${mes} ${num}`;
+        }
+        return null;
+    }
+
     function processarDadosPlanilha(linhasCsv) {
         if (linhasCsv.length < 2) return;
         let headerIdx = -1;
@@ -378,18 +394,25 @@
             const chaveCurta = npuChave.substring(0, 8); // Chave curta de 8 dígitos
 
             let prioridadeIdentificada = 1;
+            let tagEspecialIdentificada = null;
+
             if (idxTipo >= 0) {
                 prioridadeIdentificada = extrairPrioridade(row[idxTipo]) || 1;
+                tagEspecialIdentificada = extrairTagEspecial(row[idxTipo]);
             } else {
                 for (let i = 0; i < row.length; i++) {
                     if (i === idxNPU || i === idxData) continue;
                     const p = extrairPrioridade(row[i]);
-                    if (p) { prioridadeIdentificada = p; break; }
+                    if (p) prioridadeIdentificada = p;
+                    const tagEsp = extrairTagEspecial(row[i]);
+                    if (tagEsp) tagEspecialIdentificada = tagEsp;
+                    if (p && tagEsp) break;
                 }
             }
             const dataStr = idxData >= 0 ? row[idxData] : null;
             BANCO_PRIORIDADES.set(chaveCurta, {
                 prioridade: prioridadeIdentificada,
+                tagEspecial: tagEspecialIdentificada,
                 data: dataStr
             });
         });
@@ -457,12 +480,22 @@
                                 if (BANCO_PRIORIDADES.has(chaveCurta)) {
                                     const p = BANCO_PRIORIDADES.get(chaveCurta);
                                     const pValue = typeof p === 'object' ? p.prioridade : p;
+                                    const tagEspecial = typeof p === 'object' ? p.tagEspecial : null;
                                     const basePrio = parseInt(pValue, 10) || 9;
                                     const tag = document.createElement("span");
                                     tag.className = `tag-prioridade prio-p${basePrio}`;
                                     tag.textContent = `P${pValue}`;
                                     tag.title = `Prioridade Nível P${pValue}`;
                                     el.appendChild(tag);
+
+                                    if (tagEspecial) {
+                                        const tagEspNode = document.createElement("span");
+                                        const classeTipo = tagEspecial.startsWith("Saldo") ? "tag-saldo" : "tag-incon";
+                                        tagEspNode.className = `tag-prioridade ${classeTipo}`;
+                                        tagEspNode.textContent = tagEspecial;
+                                        tagEspNode.title = tagEspecial;
+                                        el.appendChild(tagEspNode);
+                                    }
                                 }
                             });
                         }
