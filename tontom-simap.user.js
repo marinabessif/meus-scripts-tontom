@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tontom-Simap (Servidor)
 // @namespace    simap-tjpe
-// @version      2.2
+// @version      2.3
 // @description  Menu de observações, Prioridades, painel móvel com fila de trabalho consolidada, filtros, botões de cópia individual, sincronização em tempo real e redirecionamento de foco por página.
 // @match        https://simap.svc.tjpe.jus.br/*
 // @match        https://frontend.pje.cloud.tjpe.jus.br/*
@@ -69,6 +69,8 @@
         .prio-p7 { background-color: #6366f1 !important; }
         .prio-p8 { background-color: #ec4899 !important; }
         .prio-p9 { background-color: #64748b !important; }
+        .tag-saldo { background-color: #059669 !important; color: #fff !important; }
+        .tag-incon { background-color: #d97706 !important; color: #fff !important; }
     `);
 
     const BANCO_PRIORIDADES = new Map();
@@ -113,7 +115,7 @@
     function extrairPrioridade(textoCelula) {
         if (!textoCelula) return null;
         const clean = String(textoCelula).trim();
-
+        
         // 1. Tenta número (com ou sem decimal) no início da célula (ex: "1", "1.1", "2 - (+20 dias)")
         let m = clean.match(/^\s*(\d+(?:[.,]\d+)?)/);
         if (m) {
@@ -121,13 +123,27 @@
             const base = parseInt(valorStr, 10);
             if (base >= 1 && base <= 11) return valorStr;
         }
-
+        
         // 2. Tenta padrões com prefixos comuns (ex: "P1", "P 1.1", "Origem 2", "Prioridade 4")
         m = clean.match(/(?:P|p|Origem|Prioridade)\s*(\d+(?:[.,]\d+)?)/i);
         if (m) {
             const valorStr = m[1].replace(',', '.');
             const base = parseInt(valorStr, 10);
             if (base >= 1 && base <= 11) return valorStr;
+        }
+        return null;
+    }
+
+    function extrairTagEspecial(textoCelula) {
+        if (!textoCelula) return null;
+        const str = String(textoCelula).trim();
+        const match = str.match(/(saldo|inconsist[êe]ncias?|incon)(?:\s+plan|\s+planilha)?\s+([a-zà-ú]{3,})\s+(\d{1,2})/i);
+        if (match) {
+            const tipoRaw = match[1].toLowerCase();
+            const tipo = tipoRaw.includes('saldo') ? 'Saldo' : 'INCON';
+            const mes = match[2].substring(0, 3).toUpperCase();
+            const num = String(match[3]).padStart(2, '0');
+            return `${tipo} ${mes} ${num}`;
         }
         return null;
     }
@@ -147,7 +163,7 @@
         const dados = linhasCsv.slice(headerIdx + 1);
         const idxNPU = header.findIndex(h => h === "NPU" || h.includes("PROCESSO") || h.includes("NUMERO"));
         let idxTipo = header.findIndex(h => h === "ORIGEM" || h === "ORIGENS" || h.includes("TIPO") || h === "PRIORIDADE" || h === "PRIO");
-
+        
         if (idxTipo < 0) {
             idxTipo = header.findIndex(h => h.includes("ORIGEM") || h.includes("PRIO"));
         }
@@ -157,18 +173,27 @@
             const npuBruto = row[idxNPU >= 0 ? idxNPU : 0];
             const npuChave = limparNPU(npuBruto);
             if (npuChave.length !== 20) return;
-
+            
             let prioridadeIdentificada = 1;
+            let tagEspecialIdentificada = null;
+
             if (idxTipo >= 0) {
                 prioridadeIdentificada = extrairPrioridade(row[idxTipo]) || 1;
+                tagEspecialIdentificada = extrairTagEspecial(row[idxTipo]);
             } else {
                 for (let i = 0; i < row.length; i++) {
                     if (i === idxNPU) continue;
                     const p = extrairPrioridade(row[i]);
-                    if (p) { prioridadeIdentificada = p; break; }
+                    if (p) prioridadeIdentificada = p;
+                    const tagEsp = extrairTagEspecial(row[i]);
+                    if (tagEsp) tagEspecialIdentificada = tagEsp;
+                    if (p && tagEsp) break;
                 }
             }
-            BANCO_PRIORIDADES.set(npuChave, prioridadeIdentificada);
+            BANCO_PRIORIDADES.set(npuChave, {
+                prioridade: prioridadeIdentificada,
+                tagEspecial: tagEspecialIdentificada
+            });
         });
         aplicarTagsNaTela();
     }
@@ -206,7 +231,9 @@
                             correspondencias.forEach(npuMatch => {
                                 const chave = limparNPU(npuMatch);
                                 if (BANCO_PRIORIDADES.has(chave)) {
-                                    const pStr = BANCO_PRIORIDADES.get(chave); // ex: "4.1" ou "4"
+                                    const item = BANCO_PRIORIDADES.get(chave);
+                                    const pStr = typeof item === 'object' ? item.prioridade : item;
+                                    const tagEspecial = typeof item === 'object' ? item.tagEspecial : null;
                                     const pBase = parseInt(pStr, 10); // Extrai apenas a base inteira (ex: 4)
 
                                     const tag = document.createElement("span");
@@ -215,6 +242,15 @@
 
                                     tag.title = `Prioridade Nível P${pStr}`;
                                     el.appendChild(tag);
+
+                                    if (tagEspecial) {
+                                        const tagEspNode = document.createElement("span");
+                                        const classeTipo = tagEspecial.startsWith("Saldo") ? "tag-saldo" : "tag-incon";
+                                        tagEspNode.className = `tag-prioridade ${classeTipo}`;
+                                        tagEspNode.textContent = tagEspecial;
+                                        tagEspNode.title = tagEspecial;
+                                        el.appendChild(tagEspNode);
+                                    }
                                 }
                             });
                         }
@@ -242,7 +278,6 @@
         { display: "*PRAZO EM CURSO NO SISTEMA", prefixo: "*PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
         { display: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", prefixo: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação Conexa:", rotuloExtra: "Nº" },
         { display: "*PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", prefixo: "*PROCESSO SUSPENSO (Determinação judicial)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
-        { display: "*PROCESSO SUSPENSO (Data de Retorno)", prefixo: "*PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
         { display: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", prefixo: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
         { display: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", prefixo: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência)", precisaExtra: true, labelExtra: "Informe o Nº do processo:", rotuloExtra: "Nº" },
         { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
@@ -403,7 +438,7 @@
                 const chk = obterCheckboxNotificar();
                 const isChecked = isCheckboxChecked(chk);
                 let texto = txtAreaOriginal.value.trim();
-
+                
                 texto = texto.replace(/[\s]*\[NOTIFICADO\]/g, '').trim();
                 if (isChecked) {
                     txtAreaOriginal.value = (texto + " [NOTIFICADO]").trim();
@@ -437,7 +472,7 @@
                 selectImp.focus();
 
                 acumularTextoOficial(opcaoSelecionada.prefixo);
-            }
+            } 
             // Lógica do Campo Aberto (Normal)
             else if (opcaoSelecionada.precisaExtra) {
                 divImpedimento.style.display = 'none';
@@ -448,7 +483,7 @@
                 inputExtra.focus();
 
                 acumularTextoOficial(opcaoSelecionada.prefixo);
-            }
+            } 
             // Opções Simples
             else {
                 divImpedimento.style.display = 'none';
@@ -488,11 +523,11 @@
         selectImp.addEventListener('change', function() {
             const val = this.value;
             if (!val) return;
-
+            
             const opcaoSelecionada = opcoesMenu[select.value];
             const textoFinal = `${opcaoSelecionada.prefixo} | Motivo: ${val}`;
             substituirTextoTemporario(textoFinal);
-
+            
             // Conclui a seleção
             select.value = '';
             divImpedimento.style.display = 'none';
@@ -589,7 +624,7 @@
             display:none; font-family: sans-serif;
         `;
         document.body.appendChild(div);
-
+        
         // Inicializa com a última posição salva (antes de chamar tornarElementoArrastavel)
         const salvoTop = localStorage.getItem('painelContadoresServidor_top');
         const salvoLeft = localStorage.getItem('painelContadoresServidor_left');
@@ -651,6 +686,16 @@
                             <td id="p1-total">-</td><td id="p1-fin">-</td><td id="p1-and">-</td><td id="p1-pen">-</td><td id="p1-notif">-</td>
                             <td id="p1-alerta" style="text-align:left; padding-left:6px; font-weight:bold; font-size:11px;">-</td>
                         </tr>
+                        <tr id="row-p1-saldo" style="background:#fcfcfc; font-size:11px; color:#059669;">
+                            <td style="padding-left:8px; text-align:left; font-weight:bold;">↳ Saldo</td>
+                            <td id="p1-saldo-total">-</td><td id="p1-saldo-fin">-</td><td id="p1-saldo-and">-</td><td id="p1-saldo-pen">-</td><td id="p1-saldo-notif">-</td>
+                            <td id="p1-saldo-alerta" style="text-align:left; padding-left:6px; font-style:italic;">-</td>
+                        </tr>
+                        <tr id="row-p1-incon" style="background:#fcfcfc; font-size:11px; color:#d97706;">
+                            <td style="padding-left:8px; text-align:left; font-weight:bold;">↳ INCON</td>
+                            <td id="p1-incon-total">-</td><td id="p1-incon-fin">-</td><td id="p1-incon-and">-</td><td id="p1-incon-pen">-</td><td id="p1-incon-notif">-</td>
+                            <td id="p1-incon-alerta" style="text-align:left; padding-left:6px; font-style:italic;">-</td>
+                        </tr>
                         <tr id="row-p2">
                             <td style="font-weight:bold; background:#ffeecc; color:#fd7e14;">P2</td>
                             <td id="p2-total">-</td><td id="p2-fin">-</td><td id="p2-and">-</td><td id="p2-pen">-</td><td id="p2-notif">-</td>
@@ -669,12 +714,12 @@
                     </table>
                 </div>
 
-                <!-- Seção da Fila de Trabalho Consolidada com Filtros Dinâmicos -->
+                <!-- Seção de Meus Processos Consolidada com Filtros Dinâmicos -->
                 <div id="wrapperFilaTrabalho" style="margin-top: 12px; border-top: 1px dotted #ccc; padding-top: 8px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                        <span style="font-weight: bold; font-size: 13px; color: #495057;">📋 Meus Processos</span>
+                        <span style="font-weight: bold; font-size: 13px; color: #495057;">📋 Meus Processos (Todas as Páginas)</span>
                     </div>
-
+                    
                     <!-- Linha com os Seletores de Filtros -->
                     <div style="display: flex; gap: 6px; margin-bottom: 6px; align-items: center;">
                         <select id="filtroStatus" style="flex: 1; padding: 3px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; cursor: pointer; height: 26px;">
@@ -695,6 +740,8 @@
                             <option value="7">Prioridade: P7</option>
                             <option value="8">Prioridade: P8</option>
                             <option value="9">Prioridade: P9</option>
+                            <option value="Saldo">Origem: Saldo</option>
+                            <option value="INCON">Origem: Inconsistências (INCON)</option>
                             <option value="S/P">Prioridade: Sem Prio (S/P)</option>
                         </select>
                         <button id="btnFiltroNotif" data-ativo="false" style="flex: 1; padding: 3px 6px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; color: #495057; font-weight: bold; cursor: pointer; height: 26px; transition: all 0.2s; white-space: nowrap;">
@@ -750,7 +797,7 @@
                 const ativo = btnNotif.getAttribute('data-ativo') === 'true';
                 const novoEstado = !ativo;
                 btnNotif.setAttribute('data-ativo', String(novoEstado));
-
+                
                 if (novoEstado) {
                     btnNotif.style.background = '#dc3545';
                     btnNotif.style.color = '#fff';
@@ -793,7 +840,7 @@
         let botaoAlvo = null;
         if (paginatorContainer) {
             botaoAlvo = paginatorContainer.querySelector(`[aria-label="Page ${numeroPagina}"], [aria-label="Página ${numeroPagina}"], [aria-label="page ${numeroPagina}"]`);
-
+            
             if (!botaoAlvo) {
                 const botoesAria = Array.from(paginatorContainer.querySelectorAll('[aria-label*="Page"], [aria-label*="Página"], [aria-label*="page"]'));
                 botaoAlvo = botoesAria.find(b => {
@@ -944,7 +991,7 @@
                 badge.innerHTML = '📍 Focado';
                 badge.title = 'Processo focado. Clique neste selo para remover o destaque.';
                 badge.style.cssText = 'display: inline-block; padding: 2px 6px; background: #0d6efd; color: #fff; font-size: 10px; font-weight: bold; border-radius: 4px; margin-right: 8px; animation: tontomBadgePulse 1s infinite alternate; font-family: sans-serif; cursor: pointer; user-select: none; vertical-align: middle;';
-
+                
                 badge.onclick = (e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -977,7 +1024,7 @@
             if (matchNPU) {
                 const chaveNpu = limparNPU(matchNPU[0]);
                 const processo = processosVarridos.find(p => p.chave === chaveNpu);
-
+                
                 if (processo) {
                     // 1. Extrai o Status do DOM
                     let statusText = "Pendente";
@@ -1029,6 +1076,14 @@
                     contadoresPrio[nivelPrioBase].notif += p.notif;
                     if (p.status === "Finalizado") contadoresPrio[nivelPrioBase].fin++;
                     else if (p.status === "Em andamento") contadoresPrio[nivelPrioBase].and++;
+
+                    if (p.tagEspecial) {
+                        const sub = p.tagEspecial.startsWith("Saldo") ? contadoresPrio[nivelPrioBase].saldo : contadoresPrio[nivelPrioBase].incon;
+                        sub.total++;
+                        sub.notif += p.notif;
+                        if (p.status === "Finalizado") sub.fin++;
+                        else if (p.status === "Em andamento") sub.and++;
+                    }
                 }
             }
         });
@@ -1036,7 +1091,7 @@
         atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, false);
     }
 
-    // Atualiza a visualização da fila de trabalho com botões de ação corretos e filtros dinâmicos
+    // Atualiza a visualização de Meus Processos com botões de ação corretos e filtros dinâmicos
     function atualizarFilaTrabalhoPainel(mensagemStatus) {
         const container = document.getElementById("listaFilaTrabalho");
         if (!container) return;
@@ -1052,7 +1107,7 @@
         if (processosVarridos.length === 0) {
             container.innerHTML = `
                 <div style="text-align: center; color: #6c757d; font-size: 12px; padding: 10px;">
-                    Clique em "📊 Gerar Contadores" para varrer todas as páginas e montar a fila de prioridades.
+                    Clique em "📊 Gerar Contadores" para varrer todas as páginas e montar Meus Processos.
                 </div>`;
             return;
         }
@@ -1074,10 +1129,14 @@
             ordenados = ordenados.filter(p => p.status === statusFiltro);
         }
 
-        // 2. Aplica o filtro de Prioridade (P1 a P9)
+        // 2. Aplica o filtro de Prioridade (P1 a P9) ou Origem (Saldo / INCON)
         if (prioFiltro !== "todas") {
             if (prioFiltro === "S/P") {
                 ordenados = ordenados.filter(p => p.prioridade === "S/P");
+            } else if (prioFiltro === "Saldo") {
+                ordenados = ordenados.filter(p => p.tagEspecial && p.tagEspecial.startsWith("Saldo"));
+            } else if (prioFiltro === "INCON") {
+                ordenados = ordenados.filter(p => p.tagEspecial && p.tagEspecial.startsWith("INCON"));
             } else {
                 ordenados = ordenados.filter(p => {
                     const pBase = parseInt(p.prioridade, 10);
@@ -1126,9 +1185,15 @@
 
             const tagEstilo = `display:inline-block; padding:1px 4px; font-weight:bold; font-size:9px; color:#fff; border-radius:3px; background:${corPrio};`;
 
+            let tagEspHtml = "";
+            if (p.tagEspecial) {
+                const corEsp = p.tagEspecial.startsWith("Saldo") ? "#059669" : "#d97706";
+                tagEspHtml = `<span style="display:inline-block; margin-left:4px; padding:1px 4px; font-weight:bold; font-size:9px; color:#fff; border-radius:3px; background:${corEsp};">${p.tagEspecial}</span>`;
+            }
+
             // O NPU vira um link interno limpo
             const linkDisplay = `<a href="#" class="npu-link-click" data-chave="${p.chave}" data-pagina="${p.pagina}" title="Ir para este processo na Tabela do SIMAP (Pág ${p.pagina})" style="color:#0d6efd; font-weight:bold; text-decoration:underline; cursor:pointer;">${p.npu}</a>`;
-
+            
             // Botão de copiar o número limpo ao lado do processo
             const botaoCopiar = `<button class="btn-copiar-npu" data-npu="${p.npu}" title="Copiar número do processo para colar no PJe" style="margin-left: 6px; padding: 1px 4px; font-size: 10px; cursor: pointer; border: 1px solid #ccc; background: #fff; border-radius: 3px; font-family: sans-serif; transition: background 0.15s;">📋</button>`;
 
@@ -1139,7 +1204,7 @@
             html += `
                 <tr style="border-bottom:1px solid #dee2e6; background:#fff; height:24px;">
                     <td style="padding:4px; text-align:center;"><span style="${tagEstilo}">P${p.prioridade}</span></td>
-                    <td style="padding:4px; word-break:break-all; display: flex; align-items: center;">${linkDisplay} ${botaoCopiar}</td>
+                    <td style="padding:4px; word-break:break-all; display: flex; align-items: center; flex-wrap: wrap;">${linkDisplay}${tagEspHtml} ${botaoCopiar}</td>
                     <td style="padding:4px; text-align:center; color:${statusCor}; font-weight:bold;">${p.status}</td>
                     <td style="padding:4px; text-align:center;">${p.notif > 0 ? `<span style="color:#dc3545; font-weight:bold;">⚠️ ${p.notif}</span>` : '-'}</td>
                 </tr>
@@ -1209,7 +1274,11 @@
 
     function resetarContadoresPrioridade() {
         for (let i = 1; i <= 4; i++) {
-            contadoresPrio[i] = { total: 0, fin: 0, and: 0, pen: 0, notif: 0 };
+            contadoresPrio[i] = {
+                total: 0, fin: 0, and: 0, pen: 0, notif: 0,
+                saldo: { total: 0, fin: 0, and: 0, pen: 0, notif: 0 },
+                incon: { total: 0, fin: 0, and: 0, pen: 0, notif: 0 }
+            };
         }
     }
 
@@ -1240,6 +1309,18 @@
             document.getElementById(`p${i}-notif`).innerText = "⏳";
             document.getElementById(`p${i}-alerta`).innerText = "-";
         }
+
+        ['saldo', 'incon'].forEach(tipo => {
+            const elTot = document.getElementById(`p1-${tipo}-total`);
+            if (elTot) {
+                elTot.innerText = "⏳";
+                document.getElementById(`p1-${tipo}-fin`).innerText = "⏳";
+                document.getElementById(`p1-${tipo}-and`).innerText = "⏳";
+                document.getElementById(`p1-${tipo}-pen`).innerText = "⏳";
+                document.getElementById(`p1-${tipo}-notif`).innerText = "⏳";
+                document.getElementById(`p1-${tipo}-alerta`).innerText = "-";
+            }
+        });
 
         resetarContadoresPrioridade();
         processosVarridos = [];
@@ -1274,7 +1355,7 @@
             linhas.forEach(linha => {
                 const textoLinha = childText(linha);
                 if (!textoLinha || textoLinha.includes("Nenhum registro encontrado")) return;
-
+                
                 const matchNPU = textoLinha.match(regexValidaNPU);
                 if (!matchNPU) return;
 
@@ -1300,15 +1381,26 @@
                 }
 
                 let prioridadeIdentificada = null;
+                let tagEspecialIdentificada = null;
                 if (BANCO_PRIORIDADES.has(chaveNpu)) {
-                    prioridadeIdentificada = BANCO_PRIORIDADES.get(chaveNpu);
-                    const nivelPrioBase = parseInt(prioridadeIdentificada, 10); // Agrupa 4.1 e 4.2 no contador 4
+                    const item = BANCO_PRIORIDADES.get(chaveNpu);
+                    prioridadeIdentificada = typeof item === 'object' ? item.prioridade : item;
+                    tagEspecialIdentificada = typeof item === 'object' ? item.tagEspecial : null;
+                    const nivelPrioBase = parseInt(prioridadeIdentificada, 10);
 
                     if (nivelPrioBase >= 1 && nivelPrioBase <= 4) {
                         contadoresPrio[nivelPrioBase].total++;
                         contadoresPrio[nivelPrioBase].notif += qtdLivrosNaLinha;
                         if (isFin) contadoresPrio[nivelPrioBase].fin++;
                         else if (isAnd) contadoresPrio[nivelPrioBase].and++;
+
+                        if (tagEspecialIdentificada) {
+                            const sub = tagEspecialIdentificada.startsWith("Saldo") ? contadoresPrio[nivelPrioBase].saldo : contadoresPrio[nivelPrioBase].incon;
+                            sub.total++;
+                            sub.notif += qtdLivrosNaLinha;
+                            if (isFin) sub.fin++;
+                            else if (isAnd) sub.and++;
+                        }
                     }
                 }
 
@@ -1318,6 +1410,7 @@
                     npu: npuFormatado,
                     chave: chaveNpu,
                     prioridade: prioridadeIdentificada || "S/P",
+                    tagEspecial: tagEspecialIdentificada || null,
                     prioValor: parsedPrio,
                     status: statusText,
                     notif: qtdLivrosNaLinha,
@@ -1376,12 +1469,35 @@
         elPenGeral.style.color = penGeral > 0 ? "#b02a37" : "#157347";
         elPenGeral.style.fontWeight = penGeral > 0 ? "bold" : "normal";
 
-        // Indica a coluna individual de Pendentes (Processos que não sofreram alteração na sessão)
         for (let i = 1; i <= 4; i++) {
             contadoresPrio[i].pen = contadoresPrio[i].total - (contadoresPrio[i].fin + contadoresPrio[i].and);
         }
 
-        // Nova Lógica de Alertas Inteligentes com Cascata Flexível (Refinada pela Gestora)
+        // Atualiza subcontadores de Saldo e INCON (exclusivo para P1)
+        ['saldo', 'incon'].forEach(tipo => {
+            const sub = contadoresPrio[1][tipo];
+            sub.pen = sub.total - (sub.fin + sub.and);
+            const elTot = document.getElementById(`p1-${tipo}-total`);
+            if (elTot) {
+                elTot.innerText = sub.total;
+                document.getElementById(`p1-${tipo}-fin`).innerText = sub.fin;
+                document.getElementById(`p1-${tipo}-and`).innerText = sub.and;
+                const elPen = document.getElementById(`p1-${tipo}-pen`);
+                elPen.innerText = sub.pen >= 0 ? sub.pen : 0;
+                elPen.style.color = sub.pen > 0 ? "#b02a37" : "#157347";
+                document.getElementById(`p1-${tipo}-notif`).innerText = sub.notif;
+                const elAl = document.getElementById(`p1-${tipo}-alerta`);
+                if (sub.total === 0) {
+                    elAl.innerText = "-";
+                } else if (sub.pen === 0) {
+                    elAl.innerText = "✅ Concluído";
+                } else {
+                    elAl.innerText = `▶️ ${sub.pen} pendente(s)`;
+                }
+            }
+        });
+
+        // Nova Lógica de Alertas Inteligentes com Cascata Flexível
         for (let i = 1; i <= 4; i++) {
             const pData = contadoresPrio[i];
             document.getElementById(`p${i}-total`).innerText = pData.total;
@@ -1403,7 +1519,6 @@
                 continue;
             }
 
-            // 1. CHECAGEM DE CASCATA FLEXÍVEL: Alguma prioridade acima está com pendência BRUTA (pen > 0)?
             let bloqueadoPorPrioAcima = false;
             let maiorBloqueador = null;
 
@@ -1411,26 +1526,21 @@
                 if (contadoresPrio[j].total > 0 && contadoresPrio[j].pen > 0) {
                     bloqueadoPorPrioAcima = true;
                     maiorBloqueador = j;
-                    break; // O primeiro lote intocado acima trava a cascata
+                    break;
                 }
             }
 
-            // 2. APLICAÇÃO DOS ALERTAS DA SUA NOVA REGRA:
             if (bloqueadoPorPrioAcima) {
-                // Bloqueado apenas se houver pendente bruto acima
                 elAlerta.innerText = `⚠️ Atenção! Cumpra P${maiorBloqueador} primeiro.`;
                 elAlerta.style.color = "#dc3545";
             } else {
-                // Lote acima está limpo OU apenas em andamento (com pendência de prazo/sistema), liberando a linha atual!
                 if (pData.fin === pData.total) {
-                    elAlerta.innerText = (i === 1) ? "✅100% Finalizado" : "✅ 100% Finalizado";
+                    elAlerta.innerText = (i === 1) ? "✅ Lote 100% Concluído" : "✅ Concluído";
                     elAlerta.style.color = "#157347";
                 } else if (pData.pen > 0) {
-                    // Tem pendências brutas no lote atual
                     elAlerta.innerText = (i === 1) ? "🎯 Há pendências na fila de P1" : "▶️ Liberado para cumprir";
                     elAlerta.style.color = (i === 1) ? "#d63384" : "#0d6efd";
                 } else {
-                    // pen === 0 e and > 0: Só restam processos em andamento aguardando algo externo
                     elAlerta.innerText = `⏳ Finalizar andamentos de P${i}`;
                     elAlerta.style.color = "#fd7e14";
                 }
@@ -1441,7 +1551,7 @@
     // Torna o elemento arrastável na tela
     function tornarElementoArrastavel(elemento, gatilho) {
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-
+        
         // Aplica posição salva anteriormente se existir
         const salvoTop = localStorage.getItem(elemento.id + '_top');
         const salvoLeft = localStorage.getItem(elemento.id + '_left');
@@ -1453,14 +1563,14 @@
         if (gatilho) {
             gatilho.onmousedown = dragMouseDown;
         }
-
+        
         // Permite arrastar por qualquer área neutra (vazia) do próprio painel
         elemento.onmousedown = function(e) {
             // Ignora cliques em elementos interativos
             const tag = e.target.tagName;
             const classes = String(e.target.className || "");
             const ids = String(e.target.id || "");
-
+            
             if (tag === 'BUTTON' || tag === 'SELECT' || tag === 'INPUT' || tag === 'A' || tag === 'TH' || tag === 'TD' ||
                 ids.includes('cabecalho') || e.target.closest('#cabecalhoPainelServidor') ||
                 classes.includes('btn') || classes.includes('p-dropdown') || classes.includes('npu-link-click')) {
@@ -1485,24 +1595,24 @@
             pos2 = pos4 - e.clientY;
             pos3 = e.clientX;
             pos4 = e.clientY;
-
+            
             let novoTop = elemento.offsetTop - pos2;
             let novoLeft = elemento.offsetLeft - pos1;
-
+            
             const h = elemento.offsetHeight || 350;
             const w = elemento.offsetWidth || 640;
-
+            
             // Permite sumir quase tudo, deixando pelo menos 15px visíveis nas quatro bordas
             const minTop = -(h - 15);
             const maxTop = window.innerHeight - 15;
             const minLeft = -(w - 15);
             const maxLeft = window.innerWidth - 15;
-
+            
             if (novoTop < minTop) novoTop = minTop;
             if (novoTop > maxTop) novoTop = maxTop;
             if (novoLeft < minLeft) novoLeft = minLeft;
             if (novoLeft > maxLeft) novoLeft = maxLeft;
-
+            
             elemento.style.top = novoTop + "px";
             elemento.style.left = novoLeft + "px";
         }
@@ -1510,7 +1620,7 @@
         function closeDragElement() {
             document.onmouseup = null;
             document.onmousemove = null;
-
+            
             // Salva a posição final no localStorage
             localStorage.setItem(elemento.id + '_top', elemento.style.top);
             localStorage.setItem(elemento.id + '_left', elemento.style.left);
@@ -1531,8 +1641,8 @@
     // Observador DOM para aplicar tags de prioridade, menu e monitorar atualizações em tempo real
     const observer = new MutationObserver((mutations) => {
         // Ignora atualizações se a mutação ocorreu apenas dentro do nosso próprio painel ou menu flutuante
-        const apenasNossoPainel = mutations.every(m =>
-            m.target.closest('#painelContadoresServidor') ||
+        const apenasNossoPainel = mutations.every(m => 
+            m.target.closest('#painelContadoresServidor') || 
             m.target.closest('#containerMenuTontom') ||
             m.target.closest('#tontomControlesServidor')
         );
@@ -1553,15 +1663,15 @@
         if (!hash || !hash.startsWith("#npu=")) return;
         const npu = hash.replace("#npu=", "").trim();
         if (!npu) return;
-
+        
         console.log("😸 [Tontom] Automatizando busca de NPU:", npu);
-
+        
         let tentativas = 0;
         const maxTentativas = 30; // 6 segundos no máximo
-
+        
         // Limpa flag de click anterior
         window.tontomFiltroClicado = false;
-
+        
         const buscarInterval = setInterval(() => {
             tentativas++;
             if (tentativas > maxTentativas) {
@@ -1569,7 +1679,7 @@
                 console.warn("😸 [Tontom] Tempo limite de busca esgotado.");
                 return;
             }
-
+            
             // 1. Procura o campo de entrada do NPU
             let inputNpu = null;
             const inputs = Array.from(document.querySelectorAll('input'));
@@ -1577,15 +1687,15 @@
                 const id = String(input.id || "").toLowerCase();
                 const name = String(input.name || "").toLowerCase();
                 const placeholder = String(input.placeholder || "").toLowerCase();
-
-                if (id.includes("npu") || id.includes("processo") ||
-                    name.includes("npu") || name.includes("processo") ||
+                
+                if (id.includes("npu") || id.includes("processo") || 
+                    name.includes("npu") || name.includes("processo") || 
                     placeholder.includes("npu") || placeholder.includes("processo")) {
                     inputNpu = input;
                     break;
                 }
             }
-
+            
             // Método B: Se não achou por atributos diretos, busca por label contendo "NPU"
             if (!inputNpu) {
                 const labels = Array.from(document.querySelectorAll('label, mat-label, span, mat-placeholder'));
@@ -1593,7 +1703,7 @@
                     const text = String(el.innerText || el.textContent || "").trim().toUpperCase();
                     return text === "NPU" || text === "NPU:" || text === "PROCESSO" || text === "PROCESSO:";
                 });
-
+                
                 if (labelNpu) {
                     const forAttr = labelNpu.getAttribute('for');
                     if (forAttr) {
@@ -1613,7 +1723,7 @@
                     }
                 }
             }
-
+            
             // 2. Se o input não for encontrado, tenta expandir a seção de Filtros (APENAS UMA VEZ)
             if (!inputNpu) {
                 if (!window.tontomFiltroClicado) {
@@ -1622,11 +1732,11 @@
                         const text = String(el.innerText || el.textContent || "").trim().toLowerCase();
                         return text.includes("filtros");
                     });
-
+                    
                     if (btnFiltro) {
                         console.log("😸 [Tontom] Menu de filtros fechado. Clicando para expandir...");
                         window.tontomFiltroClicado = true;
-
+                        
                         // Encontra o ancestral clicável mais próximo (button ou a)
                         let clickable = btnFiltro;
                         while (clickable && clickable.tagName !== 'BODY') {
@@ -1638,7 +1748,7 @@
                             }
                             clickable = clickable.parentElement;
                         }
-
+                        
                         if (clickable) {
                             clickable.click();
                         } else {
@@ -1649,18 +1759,18 @@
             } else {
                 // Input encontrado! Para o loop, preenche e busca.
                 clearInterval(buscarInterval);
-
+                
                 // Preenche o NPU e dispara eventos para simular digitação real (necessário para Angular/React binding)
                 inputNpu.focus();
                 inputNpu.value = npu;
-
+                
                 const keystrokeEvents = ['focus', 'keydown', 'keypress', 'input', 'keyup', 'change', 'blur'];
                 keystrokeEvents.forEach(evtType => {
                     inputNpu.dispatchEvent(new Event(evtType, { bubbles: true }));
                 });
-
+                
                 console.log("😸 [Tontom] Input do NPU preenchido com eventos de binding.");
-
+                
                 // Clica no botão de filtrar/pesquisar
                 setTimeout(() => {
                     const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a'));
@@ -1672,7 +1782,7 @@
                             break;
                         }
                     }
-
+                    
                     if (btnBuscar) {
                         console.log("😸 [Tontom] Clicando no botão de busca.");
                         btnBuscar.click();
