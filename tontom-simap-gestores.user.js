@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          Tontom-Simap - Gestores
 // @namespace     simap-tjpe
-// @version      1.7.2
-// @description   Extensão para gestores: injeta tags de prioridade (P1-P9) nos NPUs, exibe o menu flutuante de observações padronizadas e o botão flutuante Colar NPU e Buscar.
+// @version      1.8.2
+// @description   Extensão para gestores: injeta tags de prioridade (P1-P9), tags de Saldo/INCON nos NPUs, menu de observações padronizadas e botão flutuante Colar NPU e Buscar.
 // @match         https://simap.svc.tjpe.jus.br/*
 // @match         https://*.tjpe.jus.br/*
 // @match         https://*.pje.cloud.tjpe.jus.br/*
@@ -16,11 +16,10 @@
 
 (function () {
     'use strict';
-
     const isPJe = window.location.hostname.includes("pje");
     const URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1RFS3XkGQ7Ga1NqCMXJmqYGcR-JBCXtYB7r51quVb0yE/edit?gid=1744875210";
 
-    console.log("😸 [Tontom] Iniciando extensão Gestores v1.7.2...");
+    console.log("😸 [Tontom] Iniciando extensão Gestores v1.8.2...");
 
     GM_addStyle(`
 @media print {
@@ -47,6 +46,8 @@
 .prio-p7 { background:#6366f1 !important; }
 .prio-p8 { background:#ec4899 !important; }
 .prio-p9 { background:#64748b !important; }
+.tag-saldo { background:#059669 !important; color:#fff !important; }
+.tag-incon { background:#d97706 !important; color:#fff !important; }
 `);
 
     const BANCO_PRIORIDADES = new Map();
@@ -69,23 +70,24 @@
     // ==========================================
 
     const opcoesPadrao = [
-        { texto: "DÚVIDA (campo aberto)", precisaExtra: true, labelExtra: "Digite a dúvida:" },
-        { texto: "SUPERVISÃO (campo aberto)", precisaExtra: true, labelExtra: "Digite o motivo da supervisão:" },
-        { texto: "SISCONDJ (Alvará gravado OU Vinculação de Conta)", precisaExtra: false },
-        { texto: "PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
-        { texto: "PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação:" },
-        { texto: "PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:" },
-        { texto: "PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
-        { texto: "PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", precisaExtra: true, labelExtra: "Informe o Nº do processo:" },
-        { texto: "ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", precisaExtra: true, labelExtra: "Informe a Data ou Motivo:" },
-        { texto: "ERRO DE FLUXO (Nº do Chamado)", precisaExtra: true, labelExtra: "Informe o Nº do Chamado:" },
-        { texto: "LEILÃO", precisaExtra: false },
-        { texto: "REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
-        { texto: "PRECATÓRIO/RPV", precisaExtra: false },
-        { texto: "CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", precisaExtra: false },
-        { texto: "INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false }
+        { display: "SUPERVISÃO/DÚVIDA (campo aberto)", prefixo: "SUPERVISÃO/DÚVIDA", precisaExtra: true, labelExtra: "Digite o motivo ou a dúvida:", rotuloExtra: "Detalhe" },
+        { display: "*SERVIDOR (campo aberto)", prefixo: "*SERVIDOR", precisaExtra: true, labelExtra: "Digite o lembrete/observação interna:", rotuloExtra: "Lembrete" },
+        { display: "*SISCONDJ (Alvará gravado)", prefixo: "*SISCONDJ (Alvará gravado)", precisaExtra: false },
+        { display: "*SISCONDJ (Vinculação de Conta)", prefixo: "*SISCONDJ (Vinculação de Conta)", precisaExtra: false },
+        { display: "*PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", prefixo: "*PRAZO ABERTO FORA DO SISTEMA", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PRAZO EM CURSO NO SISTEMA", prefixo: "*PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
+        { display: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", prefixo: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação Conexa:", rotuloExtra: "Nº" },
+        { display: "*PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", prefixo: "*PROCESSO SUSPENSO (Determinação judicial)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PROCESSO SUSPENSO (Data de Retorno)", prefixo: "*PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", prefixo: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
+        { display: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", prefixo: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência)", precisaExtra: true, labelExtra: "Informe o Nº do processo:", rotuloExtra: "Nº" },
+        { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
+        { display: "*ERRO DE FLUXO (Nº do Chamado)", prefixo: "*ERRO DE FLUXO", precisaExtra: true, labelExtra: "Informe o Nº do Chamado:", rotuloExtra: "Chamado" },
+        { display: "*LEILÃO", prefixo: "*LEILÃO", precisaExtra: false },
+        { display: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", prefixo: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
+        { display: "*PRECATÓRIO/RPV", prefixo: "*PRECATÓRIO/RPV", precisaExtra: false },
+        { display: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", prefixo: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", precisaExtra: false },
+        { display: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", prefixo: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false }
     ];
 
     let textoPrevioAoSelect = "";
@@ -116,7 +118,7 @@
         opcoesPadrao.forEach((opt, index) => {
             const o = document.createElement('option');
             o.value = index;
-            o.innerText = opt.texto;
+            o.innerText = opt.display;
             select.appendChild(o);
         });
         container.appendChild(select);
@@ -140,6 +142,77 @@
 
         txtAreaOriginal.parentNode.insertBefore(container, txtAreaOriginal);
 
+        // --- Sincronização do Checkbox de Notificação (Tontom) ---
+        function obterCheckboxNotificar() {
+            const labels = Array.from(document.querySelectorAll('label, span, div'));
+            const labelNotif = labels.find(el => el.innerText && el.innerText.trim().includes('Notificar Supervisão/Servidor'));
+            if (labelNotif) {
+                const pCheckbox = labelNotif.closest('p-checkbox');
+                if (pCheckbox) {
+                    return pCheckbox.querySelector('input[type="checkbox"]') || pCheckbox;
+                }
+                const parent = labelNotif.parentElement;
+                if (parent) {
+                    return parent.querySelector('input[type="checkbox"]') || parent.querySelector('.p-checkbox-box') || parent;
+                }
+            }
+            return document.querySelector('p-checkbox input[type="checkbox"]') || document.querySelector('input[type="checkbox"]');
+        }
+
+        function isCheckboxChecked(chk) {
+            if (!chk) return false;
+            if (chk.tagName === 'INPUT') {
+                return chk.checked;
+            }
+            const box = chk.querySelector('.p-checkbox-box') || chk;
+            return box.classList.contains('p-highlight') || box.getAttribute('aria-checked') === 'true' || chk.checked;
+        }
+
+        function setCheckboxChecked(chk, state) {
+            if (!chk) return;
+            const input = chk.tagName === 'INPUT' ? chk : chk.querySelector('input[type="checkbox"]');
+            if (input) {
+                if (input.checked !== state) {
+                    input.click();
+                }
+            } else {
+                const box = chk.querySelector('.p-checkbox-box') || chk;
+                const isCurrentlyChecked = box.classList.contains('p-highlight') || box.getAttribute('aria-checked') === 'true';
+                if (isCurrentlyChecked !== state) {
+                    box.click();
+                }
+            }
+        }
+
+        // Inicialização: Se a observação já possui a tag [NOTIFICADO] salva no texto
+        setTimeout(() => {
+            const chk = obterCheckboxNotificar();
+            let texto = txtAreaOriginal.value;
+            if (texto.includes('[NOTIFICADO]')) {
+                setCheckboxChecked(chk, true);
+                txtAreaOriginal.value = texto.replace(/[\s]*\[NOTIFICADO\]/g, '').trim();
+                dispararEventos(txtAreaOriginal);
+            }
+        }, 400);
+
+        // Intercepta o clique no botão Salvar para embutir [NOTIFICADO] se marcado
+        const btnSalvar = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('Salvar') || btn.textContent.includes('Salvar'));
+        if (btnSalvar) {
+            btnSalvar.addEventListener('click', function(e) {
+                const chk = obterCheckboxNotificar();
+                const isChecked = isCheckboxChecked(chk);
+                let texto = txtAreaOriginal.value.trim();
+                
+                texto = texto.replace(/[\s]*\[NOTIFICADO\]/g, '').trim();
+                if (isChecked) {
+                    txtAreaOriginal.value = (texto + " [NOTIFICADO]").trim();
+                } else {
+                    txtAreaOriginal.value = texto;
+                }
+                dispararEventos(txtAreaOriginal);
+            }, true);
+        }
+
         select.addEventListener('change', function() {
             const idx = this.value;
             if (idx === '') {
@@ -157,12 +230,13 @@
                 inputExtra.value = '';
                 inputExtra.focus();
 
-                acumularTextoOficial(opcaoSelecionada.texto);
+                acumularTextoOficial(opcaoSelecionada.prefixo);
             } else {
                 divExtra.style.display = 'none';
                 inputExtra.value = '';
 
-                acumularTextoOficial(opcaoSelecionada.texto);
+                const textoFinal = opcaoSelecionada.cleanText || opcaoSelecionada.prefixo;
+                acumularTextoOficial(textoFinal);
                 select.value = '';
             }
         });
@@ -173,7 +247,7 @@
 
             const opcaoSelecionada = opcoesPadrao[idx];
             const infoAdicional = this.value.trim();
-            const textoTermo = infoAdicional ? `${opcaoSelecionada.texto} - ${infoAdicional}` : opcaoSelecionada.texto;
+            const textoTermo = infoAdicional ? `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${infoAdicional}` : opcaoSelecionada.prefixo;
 
             substituirTextoTemporario(textoTermo);
         });
@@ -473,15 +547,26 @@
                     }, 2000);
                     return;
                 }
+
+                const targetUrl = `https://simap.svc.tjpe.jus.br/historico-servidor-processo#npu=${npuLimpo}`;
+                const isCorrectPage = window.location.hostname === 'simap.svc.tjpe.jus.br' && window.location.pathname.includes('/historico-servidor-processo');
                 
-                btn.innerHTML = '⏳ Buscando...';
-                btn.style.background = 'linear-gradient(135deg, #43a047, #2e7d32)';
-                expandirFiltrosEBuscar(npuLimpo);
-                
-                setTimeout(() => {
-                    btn.innerHTML = '📋 Colar NPU e Buscar';
-                    btn.style.background = 'linear-gradient(135deg, #1a73e8, #0d47a1)';
-                }, 3000);
+                if (isCorrectPage) {
+                    btn.innerHTML = '⏳ Buscando...';
+                    btn.style.background = 'linear-gradient(135deg, #43a047, #2e7d32)';
+                    
+                    window.location.hash = `npu=${npuLimpo}`;
+                    expandirFiltrosEBuscar(npuLimpo);
+                    
+                    setTimeout(() => {
+                        btn.innerHTML = '📋 Colar NPU e Buscar';
+                        btn.style.background = 'linear-gradient(135deg, #1a73e8, #0d47a1)';
+                    }, 3000);
+                } else {
+                    btn.innerHTML = '⏳ Redirecionando...';
+                    btn.style.background = 'linear-gradient(135deg, #f57c00, #e65100)';
+                    window.location.href = targetUrl;
+                }
             } catch(err) {
                 mostrarLogVisual("Erro ao ler área de transferência. Clique na página para dar foco antes de clicar.", "#f57c00");
                 btn.innerHTML = '⚠️ Erro ao colar';
@@ -548,10 +633,36 @@
 
     function extrairPrioridade(textoCelula) {
         if (!textoCelula) return null;
-        const m = String(textoCelula).trim().match(/(\d+)/);
-        if (!m) return null;
-        const n = parseInt(m[1], 10);
-        return (n >= 1 && n <= 11) ? n : null;
+        const clean = String(textoCelula).trim();
+        
+        let m = clean.match(/^\s*(\d+(?:[.,]\d+)?)/);
+        if (m) {
+            const valorStr = m[1].replace(',', '.');
+            const base = parseInt(valorStr, 10);
+            if (base >= 1 && base <= 11) return valorStr;
+        }
+        
+        m = clean.match(/(?:P|p|Origem|Prioridade)\s*(\d+(?:[.,]\d+)?)/i);
+        if (m) {
+            const valorStr = m[1].replace(',', '.');
+            const base = parseInt(valorStr, 10);
+            if (base >= 1 && base <= 11) return valorStr;
+        }
+        return null;
+    }
+
+    function extrairTagEspecial(textoCelula) {
+        if (!textoCelula) return null;
+        const str = String(textoCelula).trim();
+        const match = str.match(/(saldo|inconsist[êe]ncias?|incon)(?:\s+plan|\s+planilha)?\s+([a-zà-ú]{3,})\s+(\d{1,2})/i);
+        if (match) {
+            const tipoRaw = match[1].toLowerCase();
+            const tipo = tipoRaw.includes('saldo') ? 'Saldo' : 'INCON';
+            const mes = match[2].substring(0, 3).toUpperCase();
+            const num = String(match[3]).padStart(2, '0');
+            return `${tipo} ${mes} ${num}`;
+        }
+        return null;
     }
 
     function processarDadosPlanilha(linhasCsv) {
@@ -585,18 +696,25 @@
             const chaveCurta = npuChave.substring(0, 8);
 
             let prioridadeIdentificada = 1;
+            let tagEspecialIdentificada = null;
+
             if (idxTipo >= 0) {
                 prioridadeIdentificada = extrairPrioridade(row[idxTipo]) || 1;
+                tagEspecialIdentificada = extrairTagEspecial(row[idxTipo]);
             } else {
                 for (let i = 0; i < row.length; i++) {
                     if (i === idxNPU || i === idxData) continue;
                     const p = extrairPrioridade(row[i]);
-                    if (p) { prioridadeIdentificada = p; break; }
+                    if (p) prioridadeIdentificada = p;
+                    const tagEsp = extrairTagEspecial(row[i]);
+                    if (tagEsp) tagEspecialIdentificada = tagEsp;
+                    if (p && tagEsp) break;
                 }
             }
             const dataStr = idxData >= 0 ? row[idxData] : null;
             BANCO_PRIORIDADES.set(chaveCurta, {
                 prioridade: prioridadeIdentificada,
+                tagEspecial: tagEspecialIdentificada,
                 data: dataStr
             });
         });
@@ -657,11 +775,22 @@
                                 if (BANCO_PRIORIDADES.has(chaveCurta)) {
                                     const p = BANCO_PRIORIDADES.get(chaveCurta);
                                     const pValue = typeof p === 'object' ? p.prioridade : p;
+                                    const tagEspecial = typeof p === 'object' ? p.tagEspecial : null;
+                                    const basePrio = parseInt(pValue, 10) || 9;
                                     const tag = document.createElement("span");
-                                    tag.className = `tag-prioridade prio-p${pValue}`;
+                                    tag.className = `tag-prioridade prio-p${basePrio}`;
                                     tag.textContent = `P${pValue}`;
                                     tag.title = `Prioridade Nível P${pValue}`;
                                     el.appendChild(tag);
+
+                                    if (tagEspecial) {
+                                        const tagEspNode = document.createElement("span");
+                                        const classeTipo = tagEspecial.startsWith("Saldo") ? "tag-saldo" : "tag-incon";
+                                        tagEspNode.className = `tag-prioridade ${classeTipo}`;
+                                        tagEspNode.textContent = tagEspecial;
+                                        tagEspNode.title = tagEspecial;
+                                        el.appendChild(tagEspNode);
+                                    }
                                 }
                             });
                         }
