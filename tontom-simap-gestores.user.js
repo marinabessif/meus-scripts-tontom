@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          Tontom-Simap - Gestores
 // @namespace     simap-tjpe
-// @version      1.8.2
+// @version      1.8.3
 // @description   Extensão para gestores: injeta tags de prioridade (P1-P9), tags de Saldo/INCON nos NPUs, menu de observações padronizadas e botão flutuante Colar NPU e Buscar.
 // @match         https://simap.svc.tjpe.jus.br/*
 // @match         https://*.tjpe.jus.br/*
