@@ -74,15 +74,15 @@
         { display: "*SERVIDOR (campo aberto)", prefixo: "*SERVIDOR", precisaExtra: true, labelExtra: "Digite o lembrete/observação interna:", rotuloExtra: "Lembrete" },
         { display: "*SISCONDJ (Alvará gravado)", prefixo: "*SISCONDJ (Alvará gravado)", precisaExtra: false },
         { display: "*SISCONDJ (Vinculação de Conta)", prefixo: "*SISCONDJ (Vinculação de Conta)", precisaExtra: false },
-        { display: "*PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", prefixo: "*PRAZO ABERTO FORA DO SISTEMA", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", prefixo: "*PRAZO ABERTO FORA DO SISTEMA", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno", tipoExtra: "data" },
         { display: "*PRAZO EM CURSO NO SISTEMA", prefixo: "*PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
         { display: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", prefixo: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação Conexa:", rotuloExtra: "Nº" },
-        { display: "*PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", prefixo: "*PROCESSO SUSPENSO (Determinação judicial)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
-        { display: "*PROCESSO SUSPENSO (Data de Retorno)", prefixo: "*PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno" },
+        { display: "*PROCESSO SUSPENSO (Determinação judicial - informar data de retorno)", prefixo: "*PROCESSO SUSPENSO (Determinação judicial)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno", tipoExtra: "data" },
+        { display: "*PROCESSO SUSPENSO (Data de Retorno)", prefixo: "*PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno", tipoExtra: "data" },
         { display: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", prefixo: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
         { display: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", prefixo: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência)", precisaExtra: true, labelExtra: "Informe o Nº do processo:", rotuloExtra: "Nº" },
-        { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
-        { display: "*ERRO DE FLUXO (Nº do Chamado)", prefixo: "*ERRO DE FLUXO", precisaExtra: true, labelExtra: "Informe o Nº do Chamado:", rotuloExtra: "Chamado" },
+        { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, tipoExtra: "dataOuMotivo", labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
+        { display: "*ERRO DE FLUXO (Nº do Chamado ou Falha na Migração)", prefixo: "*ERRO DE FLUXO", precisaExtra: true, labelExtra: "Informe o Nº do Chamado ou escreva falha na migração:", rotuloExtra: "Chamado" },
         { display: "*LEILÃO", prefixo: "*LEILÃO", precisaExtra: false },
         { display: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", prefixo: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
         { display: "*PRECATÓRIO/RPV", prefixo: "*PRECATÓRIO/RPV", precisaExtra: false },
@@ -136,9 +136,92 @@
         inputExtra.type = 'text';
         inputExtra.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;';
 
+        // Função de validação de data dd/mm/aa
+        function validarDataDDMMAA(valor) {
+            if (!/^\d{2}\/\d{2}\/\d{2}$/.test(valor)) return false;
+            const partes = valor.split('/');
+            const dia = parseInt(partes[0], 10);
+            const mes = parseInt(partes[1], 10);
+            const anoAbrev = parseInt(partes[2], 10);
+            const ano = anoAbrev <= 50 ? 2000 + anoAbrev : 1900 + anoAbrev;
+            if (mes < 1 || mes > 12) return false;
+            if (dia < 1) return false;
+            const dataObj = new Date(ano, mes - 1, dia);
+            return dataObj.getFullYear() === ano && dataObj.getMonth() === mes - 1 && dataObj.getDate() === dia;
+        }
+
+        // Função de máscara de data
+        function aplicarMascaraData(input) {
+            input.addEventListener('input', function(e) {
+                let val = this.value.replace(/\D/g, '');
+                if (val.length > 6) val = val.substring(0, 6);
+                if (val.length >= 5) {
+                    this.value = val.substring(0, 2) + '/' + val.substring(2, 4) + '/' + val.substring(4);
+                } else if (val.length >= 3) {
+                    this.value = val.substring(0, 2) + '/' + val.substring(2);
+                } else {
+                    this.value = val;
+                }
+            });
+        }
+
+        // Função para mostrar/esconder erro de data
+        function mostrarErroData(inputEl, erroEl, valido) {
+            if (valido) {
+                inputEl.style.borderColor = '#ced4da';
+                erroEl.style.display = 'none';
+            } else {
+                inputEl.style.borderColor = '#dc3545';
+                erroEl.style.display = 'block';
+            }
+        }
+
+        // Elemento de erro para data no inputExtra
+        const erroData = document.createElement('span');
+        erroData.style.cssText = 'display: none; color: #dc3545; font-size: 11px; margin-top: 2px;';
+        erroData.innerText = 'Data inválida. Use o formato dd/mm/aa.';
+
         divExtra.appendChild(labelExtra);
         divExtra.appendChild(inputExtra);
+        divExtra.appendChild(erroData);
         container.appendChild(divExtra);
+
+        // Div extra para ARQUIVO PROVISÓRIO (dataOuMotivo) — dois campos
+        const divDataOuMotivo = document.createElement('div');
+        divDataOuMotivo.id = 'divDataOuMotivoTontom';
+        divDataOuMotivo.style.cssText = 'display: none; margin-top: 8px;';
+
+        const labelDataDM = document.createElement('label');
+        labelDataDM.innerText = 'Data de Retorno:';
+        labelDataDM.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
+
+        const inputDataDM = document.createElement('input');
+        inputDataDM.id = 'inputDataDMTontom';
+        inputDataDM.type = 'text';
+        inputDataDM.placeholder = 'dd/mm/aa';
+        inputDataDM.maxLength = 8;
+        inputDataDM.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; margin-bottom: 4px;';
+        aplicarMascaraData(inputDataDM);
+
+        const erroDataDM = document.createElement('span');
+        erroDataDM.style.cssText = 'display: none; color: #dc3545; font-size: 11px; margin-top: 2px;';
+        erroDataDM.innerText = 'Data inválida. Use o formato dd/mm/aa.';
+
+        const labelMotivoDM = document.createElement('label');
+        labelMotivoDM.innerText = 'Motivo:';
+        labelMotivoDM.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; margin-top: 8px; color: #495057;';
+
+        const inputMotivoDM = document.createElement('input');
+        inputMotivoDM.id = 'inputMotivoDMTontom';
+        inputMotivoDM.type = 'text';
+        inputMotivoDM.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;';
+
+        divDataOuMotivo.appendChild(labelDataDM);
+        divDataOuMotivo.appendChild(inputDataDM);
+        divDataOuMotivo.appendChild(erroDataDM);
+        divDataOuMotivo.appendChild(labelMotivoDM);
+        divDataOuMotivo.appendChild(inputMotivoDM);
+        container.appendChild(divDataOuMotivo);
 
         txtAreaOriginal.parentNode.insertBefore(container, txtAreaOriginal);
 
@@ -213,28 +296,66 @@
             }, true);
         }
 
+        // Função auxiliar para esconder todos os painéis extras
+        function esconderTodosExtras() {
+            divExtra.style.display = 'none';
+            inputExtra.value = '';
+            inputExtra.type = 'text';
+            inputExtra.placeholder = '';
+            inputExtra.maxLength = '';
+            inputExtra.style.borderColor = '#ced4da';
+            erroData.style.display = 'none';
+            divDataOuMotivo.style.display = 'none';
+            inputDataDM.value = '';
+            inputDataDM.style.borderColor = '#ced4da';
+            erroDataDM.style.display = 'none';
+            inputMotivoDM.value = '';
+        }
+
         select.addEventListener('change', function() {
             const idx = this.value;
             if (idx === '') {
-                divExtra.style.display = 'none';
-                inputExtra.value = '';
+                esconderTodosExtras();
                 return;
             }
 
             const opcaoSelecionada = opcoesPadrao[idx];
             textoPrevioAoSelect = txtAreaOriginal.value.trim();
 
-            if (opcaoSelecionada.precisaExtra) {
+            // Lógica do campo de data + motivo (ARQUIVO PROVISÓRIO)
+            if (opcaoSelecionada.tipoExtra === 'dataOuMotivo') {
+                esconderTodosExtras();
+                divDataOuMotivo.style.display = 'block';
+                inputDataDM.value = '';
+                inputMotivoDM.value = '';
+                inputDataDM.focus();
+                acumularTextoOficial(opcaoSelecionada.prefixo);
+            }
+            // Lógica do campo de data formatado
+            else if (opcaoSelecionada.tipoExtra === 'data') {
+                esconderTodosExtras();
+                labelExtra.innerText = opcaoSelecionada.labelExtra;
+                divExtra.style.display = 'block';
+                inputExtra.type = 'text';
+                inputExtra.placeholder = 'dd/mm/aa';
+                inputExtra.maxLength = 8;
+                inputExtra.value = '';
+                aplicarMascaraData(inputExtra);
+                inputExtra.focus();
+                acumularTextoOficial(opcaoSelecionada.prefixo);
+            }
+            // Lógica do Campo Aberto (Normal)
+            else if (opcaoSelecionada.precisaExtra) {
+                esconderTodosExtras();
                 labelExtra.innerText = opcaoSelecionada.labelExtra;
                 divExtra.style.display = 'block';
                 inputExtra.value = '';
                 inputExtra.focus();
-
                 acumularTextoOficial(opcaoSelecionada.prefixo);
-            } else {
-                divExtra.style.display = 'none';
-                inputExtra.value = '';
-
+            }
+            // Opções Simples
+            else {
+                esconderTodosExtras();
                 const textoFinal = opcaoSelecionada.cleanText || opcaoSelecionada.prefixo;
                 acumularTextoOficial(textoFinal);
                 select.value = '';
@@ -246,18 +367,100 @@
             if (idx === '') return;
 
             const opcaoSelecionada = opcoesPadrao[idx];
-            const infoAdicional = this.value.trim();
-            const textoTermo = infoAdicional ? `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${infoAdicional}` : opcaoSelecionada.prefixo;
 
-            substituirTextoTemporario(textoTermo);
+            if (opcaoSelecionada.tipoExtra === 'data') {
+                const val = this.value;
+                if (val.length === 8) {
+                    const valido = validarDataDDMMAA(val);
+                    mostrarErroData(inputExtra, erroData, valido);
+                    if (valido) {
+                        const textoTermo = `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${val}`;
+                        substituirTextoTemporario(textoTermo);
+                    } else {
+                        substituirTextoTemporario(opcaoSelecionada.prefixo);
+                    }
+                } else {
+                    inputExtra.style.borderColor = '#ced4da';
+                    erroData.style.display = 'none';
+                    substituirTextoTemporario(opcaoSelecionada.prefixo);
+                }
+            } else {
+                const infoAdicional = this.value.trim();
+                const textoTermo = infoAdicional ? `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${infoAdicional}` : opcaoSelecionada.prefixo;
+                substituirTextoTemporario(textoTermo);
+            }
         });
 
         inputExtra.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
+                const idx = select.value;
+                if (idx !== '') {
+                    const opc = opcoesPadrao[idx];
+                    if (opc.tipoExtra === 'data' && inputExtra.value.length === 8 && !validarDataDDMMAA(inputExtra.value)) {
+                        return;
+                    }
+                }
                 select.value = '';
                 divExtra.style.display = 'none';
                 inputExtra.value = '';
+                inputExtra.style.borderColor = '#ced4da';
+                erroData.style.display = 'none';
+                txtAreaOriginal.focus();
+            }
+        });
+
+        // Handler para os campos de ARQUIVO PROVISÓRIO (dataOuMotivo)
+        function atualizarTextoDataOuMotivo() {
+            const idx = select.value;
+            if (idx === '') return;
+            const opcaoSelecionada = opcoesPadrao[idx];
+            const dataVal = inputDataDM.value.trim();
+            const motivoVal = inputMotivoDM.value.trim();
+
+            if (dataVal.length === 8) {
+                const valido = validarDataDDMMAA(dataVal);
+                mostrarErroData(inputDataDM, erroDataDM, valido);
+                if (!valido) {
+                    substituirTextoTemporario(opcaoSelecionada.prefixo);
+                    return;
+                }
+            } else {
+                inputDataDM.style.borderColor = '#ced4da';
+                erroDataDM.style.display = 'none';
+            }
+
+            let partes = [];
+            if (dataVal.length === 8 && validarDataDDMMAA(dataVal)) {
+                partes.push(`Data de Retorno: ${dataVal}`);
+            }
+            if (motivoVal) {
+                partes.push(`Motivo: ${motivoVal}`);
+            }
+
+            const textoTermo = partes.length > 0 ? `${opcaoSelecionada.prefixo} | ${partes.join(' | ')}` : opcaoSelecionada.prefixo;
+            substituirTextoTemporario(textoTermo);
+        }
+
+        inputDataDM.addEventListener('input', atualizarTextoDataOuMotivo);
+        inputMotivoDM.addEventListener('input', atualizarTextoDataOuMotivo);
+
+        inputDataDM.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (inputDataDM.value.length === 8 && !validarDataDDMMAA(inputDataDM.value)) return;
+                inputMotivoDM.focus();
+            }
+        });
+
+        inputMotivoDM.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (inputDataDM.value.length === 8 && !validarDataDDMMAA(inputDataDM.value)) return;
+                select.value = '';
+                divDataOuMotivo.style.display = 'none';
+                inputDataDM.value = '';
+                inputMotivoDM.value = '';
                 txtAreaOriginal.focus();
             }
         });
