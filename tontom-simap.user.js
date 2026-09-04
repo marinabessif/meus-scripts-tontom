@@ -502,8 +502,8 @@
             divExtra.style.display = 'none';
             inputExtra.value = '';
             inputExtra.type = 'text';
-            inputExtra.placeholder = '';
-            inputExtra.maxLength = '';
+            inputExtra.removeAttribute('placeholder');
+            inputExtra.removeAttribute('maxlength');
             inputExtra.style.borderColor = '#ced4da';
             erroData.style.display = 'none';
             divDataOuMotivo.style.display = 'none';
@@ -551,7 +551,6 @@
                 inputExtra.placeholder = 'dd/mm/aa';
                 inputExtra.maxLength = 8;
                 inputExtra.value = '';
-                aplicarMascaraData(inputExtra);
                 inputExtra.focus();
                 acumularTextoOficial(opcaoSelecionada.prefixo);
             }
@@ -560,6 +559,8 @@
                 esconderTodosExtras();
                 labelExtra.innerText = opcaoSelecionada.labelExtra;
                 divExtra.style.display = 'block';
+                inputExtra.removeAttribute('maxlength');
+                inputExtra.removeAttribute('placeholder');
                 inputExtra.value = '';
                 inputExtra.focus();
                 acumularTextoOficial(opcaoSelecionada.prefixo);
@@ -573,7 +574,7 @@
             }
         });
 
-        // Lógica do campo aberto texto (inclui validação de data quando tipoExtra === 'data')
+        // Lógica do campo aberto texto (inclui formatação e validação de data quando tipoExtra === 'data')
         inputExtra.addEventListener('input', function() {
             const idx = select.value;
             if (idx === '') return;
@@ -581,12 +582,21 @@
             const opcaoSelecionada = opcoesMenu[idx];
 
             if (opcaoSelecionada.tipoExtra === 'data') {
-                const val = this.value;
-                if (val.length === 8) {
-                    const valido = validarDataDDMMAA(val);
+                let val = this.value.replace(/\D/g, '');
+                if (val.length > 6) val = val.substring(0, 6);
+                if (val.length >= 5) {
+                    this.value = val.substring(0, 2) + '/' + val.substring(2, 4) + '/' + val.substring(4);
+                } else if (val.length >= 3) {
+                    this.value = val.substring(0, 2) + '/' + val.substring(2);
+                } else {
+                    this.value = val;
+                }
+
+                if (this.value.length === 8) {
+                    const valido = validarDataDDMMAA(this.value);
                     mostrarErroData(inputExtra, erroData, valido);
                     if (valido) {
-                        const textoTermo = `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${val}`;
+                        const textoTermo = `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${this.value}`;
                         substituirTextoTemporario(textoTermo);
                     } else {
                         substituirTextoTemporario(opcaoSelecionada.prefixo);
