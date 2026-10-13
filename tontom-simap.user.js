@@ -315,6 +315,51 @@
         inputExtra.type = 'text';
         inputExtra.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;';
 
+        // Função de validação de data dd/mm/aa
+        function validarDataDDMMAA(valor) {
+            if (!/^\d{2}\/\d{2}\/\d{2}$/.test(valor)) return false;
+            const partes = valor.split('/');
+            const dia = parseInt(partes[0], 10);
+            const mes = parseInt(partes[1], 10);
+            const anoAbrev = parseInt(partes[2], 10);
+            const ano = anoAbrev <= 50 ? 2000 + anoAbrev : 1900 + anoAbrev;
+            if (mes < 1 || mes > 12) return false;
+            if (dia < 1) return false;
+            const dataObj = new Date(ano, mes - 1, dia);
+            return dataObj.getFullYear() === ano && dataObj.getMonth() === mes - 1 && dataObj.getDate() === dia;
+        }
+
+        // Função de máscara de data: formata automaticamente com /
+        function aplicarMascaraData(input) {
+            input.addEventListener('input', function(e) {
+                let val = this.value.replace(/\D/g, '');
+                if (val.length > 6) val = val.substring(0, 6);
+                if (val.length >= 5) {
+                    this.value = val.substring(0, 2) + '/' + val.substring(2, 4) + '/' + val.substring(4);
+                } else if (val.length >= 3) {
+                    this.value = val.substring(0, 2) + '/' + val.substring(2);
+                } else {
+                    this.value = val;
+                }
+            });
+        }
+
+        // Função para mostrar/esconder erro de data
+        function mostrarErroData(inputEl, erroEl, valido) {
+            if (valido) {
+                inputEl.style.borderColor = '#ced4da';
+                erroEl.style.display = 'none';
+            } else {
+                inputEl.style.borderColor = '#dc3545';
+                erroEl.style.display = 'block';
+            }
+        }
+
+        // Elemento de erro para data no inputExtra
+        const erroData = document.createElement('span');
+        erroData.style.cssText = 'display: none; color: #dc3545; font-size: 11px; margin-top: 2px;';
+        erroData.innerText = 'Data inválida. Use o formato dd/mm/aa.';
+
         divExtra.appendChild(labelExtra);
         divExtra.appendChild(inputExtra);
 
