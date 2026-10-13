@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          Tontom-Simap - Gestores
 // @namespace     simap-tjpe
-// @version      1.8.2
-// @description   Extensão para gestores: injeta tags de prioridade (P1-P9), tags de Saldo/INCON nos NPUs, menu de observações padronizadas e botão flutuante Colar NPU e Buscar.
+// @version      1.8.3
+// @description   Extensão para gestores: injeta tags de prioridade (P1-P9), tags de Saldo/INCON nos NPUs, menu de observações padronizadas e botão flutuante Colar NPU e Buscar, ano 4 dígitos, SISCONDJ - valor indisponível SISBAJUD, PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno)
 // @match         https://simap.svc.tjpe.jus.br/*
 // @match         https://*.tjpe.jus.br/*
 // @match         https://*.pje.cloud.tjpe.jus.br/*
@@ -19,7 +19,7 @@
     const isPJe = window.location.hostname.includes("pje");
     const URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1RFS3XkGQ7Ga1NqCMXJmqYGcR-JBCXtYB7r51quVb0yE/edit?gid=1744875210";
 
-    console.log("😸 [Tontom] Iniciando extensão Gestores v1.8.2...");
+    console.log("😸 [Tontom] Iniciando extensão Gestores v1.8.3...");
 
     GM_addStyle(`
 @media print {
@@ -74,6 +74,7 @@
         { display: "*SERVIDOR (campo aberto)", prefixo: "*SERVIDOR", precisaExtra: true, labelExtra: "Digite o lembrete/observação interna:", rotuloExtra: "Lembrete" },
         { display: "*SISCONDJ (Alvará gravado)", prefixo: "*SISCONDJ (Alvará gravado)", precisaExtra: false },
         { display: "*SISCONDJ (Vinculação de Conta)", prefixo: "*SISCONDJ (Vinculação de Conta)", precisaExtra: false },
+        { display: "*SISCONDJ - valor indisponível SISBAJUD", prefixo: "*SISCONDJ - valor indisponível SISBAJUD", precisaExtra: false },
         { display: "*PRAZO ABERTO FORA DO SISTEMA (Data de Retorno)", prefixo: "*PRAZO ABERTO FORA DO SISTEMA", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno", tipoExtra: "data" },
         { display: "*PRAZO EM CURSO NO SISTEMA", prefixo: "*PRAZO EM CURSO NO SISTEMA", precisaExtra: false },
         { display: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação - informar nº)", prefixo: "*PROCESSO SUSPENSO (Tema/Ação Conexa/Outra ação)", precisaExtra: true, labelExtra: "Informe o Nº do Tema/Ação Conexa:", rotuloExtra: "Nº" },
@@ -81,6 +82,7 @@
         { display: "*PROCESSO SUSPENSO (Data de Retorno)", prefixo: "*PROCESSO SUSPENSO (Data de Retorno)", precisaExtra: true, labelExtra: "Informe a Data de Retorno:", rotuloExtra: "Data de Retorno", tipoExtra: "data" },
         { display: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", prefixo: "*PROCESSO SUSPENSO (Resposta de Precatória - PC 03/2021)", precisaExtra: false },
         { display: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", prefixo: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência)", precisaExtra: true, labelExtra: "Informe o Nº do processo:", rotuloExtra: "Nº" },
+        { display: "*PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno)", prefixo: "*PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno)", precisaExtra: false },
         { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, tipoExtra: "dataOuMotivo", labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
         { display: "*ERRO DE FLUXO (Nº do Chamado ou Falha na Migração)", prefixo: "*ERRO DE FLUXO", precisaExtra: true, labelExtra: "Informe o Nº do Chamado ou escreva falha na migração:", rotuloExtra: "Chamado" },
         { display: "*LEILÃO", prefixo: "*LEILÃO", precisaExtra: false },
@@ -136,25 +138,25 @@
         inputExtra.type = 'text';
         inputExtra.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;';
 
-        // Função de validação de data dd/mm/aa
-        function validarDataDDMMAA(valor) {
-            if (!/^\d{2}\/\d{2}\/\d{2}$/.test(valor)) return false;
+        // Função de validação de data dd/mm/aaaa
+        function validarDataDDMMAAAA(valor) {
+            if (!/^\d{2}\/\d{2}\/\d{4}$/.test(valor)) return false;
             const partes = valor.split('/');
             const dia = parseInt(partes[0], 10);
             const mes = parseInt(partes[1], 10);
-            const anoAbrev = parseInt(partes[2], 10);
-            const ano = anoAbrev <= 50 ? 2000 + anoAbrev : 1900 + anoAbrev;
+            const ano = parseInt(partes[2], 10);
             if (mes < 1 || mes > 12) return false;
-            if (dia < 1) return false;
+            if (dia < 1 || dia > 31) return false;
+            if (ano < 1900 || ano > 2100) return false;
             const dataObj = new Date(ano, mes - 1, dia);
             return dataObj.getFullYear() === ano && dataObj.getMonth() === mes - 1 && dataObj.getDate() === dia;
         }
 
-        // Função de máscara de data
+        // Função de máscara de data dd/mm/aaaa
         function aplicarMascaraData(input) {
             input.addEventListener('input', function(e) {
                 let val = this.value.replace(/\D/g, '');
-                if (val.length > 6) val = val.substring(0, 6);
+                if (val.length > 8) val = val.substring(0, 8);
                 if (val.length >= 5) {
                     this.value = val.substring(0, 2) + '/' + val.substring(2, 4) + '/' + val.substring(4);
                 } else if (val.length >= 3) {
@@ -179,7 +181,7 @@
         // Elemento de erro para data no inputExtra
         const erroData = document.createElement('span');
         erroData.style.cssText = 'display: none; color: #dc3545; font-size: 11px; margin-top: 2px;';
-        erroData.innerText = 'Data inválida. Use o formato dd/mm/aa.';
+        erroData.innerText = 'Data inválida. Use o formato dd/mm/aaaa.';
 
         divExtra.appendChild(labelExtra);
         divExtra.appendChild(inputExtra);
@@ -198,14 +200,14 @@
         const inputDataDM = document.createElement('input');
         inputDataDM.id = 'inputDataDMTontom';
         inputDataDM.type = 'text';
-        inputDataDM.placeholder = 'dd/mm/aa';
-        inputDataDM.maxLength = 8;
+        inputDataDM.placeholder = 'dd/mm/aaaa';
+        inputDataDM.maxLength = 10;
         inputDataDM.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; margin-bottom: 4px;';
         aplicarMascaraData(inputDataDM);
 
         const erroDataDM = document.createElement('span');
         erroDataDM.style.cssText = 'display: none; color: #dc3545; font-size: 11px; margin-top: 2px;';
-        erroDataDM.innerText = 'Data inválida. Use o formato dd/mm/aa.';
+        erroDataDM.innerText = 'Data inválida. Use o formato dd/mm/aaaa.';
 
         const labelMotivoDM = document.createElement('label');
         labelMotivoDM.innerText = 'Motivo:';
@@ -337,8 +339,8 @@
                 labelExtra.innerText = opcaoSelecionada.labelExtra;
                 divExtra.style.display = 'block';
                 inputExtra.type = 'text';
-                inputExtra.placeholder = 'dd/mm/aa';
-                inputExtra.maxLength = 8;
+                inputExtra.placeholder = 'dd/mm/aaaa';
+                inputExtra.maxLength = 10;
                 inputExtra.value = '';
                 inputExtra.focus();
                 acumularTextoOficial(opcaoSelecionada.prefixo);
@@ -371,7 +373,7 @@
 
             if (opcaoSelecionada.tipoExtra === 'data') {
                 let val = this.value.replace(/\D/g, '');
-                if (val.length > 6) val = val.substring(0, 6);
+                if (val.length > 8) val = val.substring(0, 8);
                 if (val.length >= 5) {
                     this.value = val.substring(0, 2) + '/' + val.substring(2, 4) + '/' + val.substring(4);
                 } else if (val.length >= 3) {
@@ -380,8 +382,8 @@
                     this.value = val;
                 }
 
-                if (this.value.length === 8) {
-                    const valido = validarDataDDMMAA(this.value);
+                if (this.value.length === 10) {
+                    const valido = validarDataDDMMAAAA(this.value);
                     mostrarErroData(inputExtra, erroData, valido);
                     if (valido) {
                         const textoTermo = `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${this.value}`;
@@ -407,7 +409,7 @@
                 const idx = select.value;
                 if (idx !== '') {
                     const opc = opcoesPadrao[idx];
-                    if (opc.tipoExtra === 'data' && inputExtra.value.length === 8 && !validarDataDDMMAA(inputExtra.value)) {
+                    if (opc.tipoExtra === 'data' && inputExtra.value.length === 10 && !validarDataDDMMAAAA(inputExtra.value)) {
                         return;
                     }
                 }
@@ -428,8 +430,8 @@
             const dataVal = inputDataDM.value.trim();
             const motivoVal = inputMotivoDM.value.trim();
 
-            if (dataVal.length === 8) {
-                const valido = validarDataDDMMAA(dataVal);
+            if (dataVal.length === 10) {
+                const valido = validarDataDDMMAAAA(dataVal);
                 mostrarErroData(inputDataDM, erroDataDM, valido);
                 if (!valido) {
                     substituirTextoTemporario(opcaoSelecionada.prefixo);
@@ -441,7 +443,7 @@
             }
 
             let partes = [];
-            if (dataVal.length === 8 && validarDataDDMMAA(dataVal)) {
+            if (dataVal.length === 10 && validarDataDDMMAAAA(dataVal)) {
                 partes.push(`Data de Retorno: ${dataVal}`);
             }
             if (motivoVal) {
@@ -458,7 +460,7 @@
         inputDataDM.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                if (inputDataDM.value.length === 8 && !validarDataDDMMAA(inputDataDM.value)) return;
+                if (inputDataDM.value.length === 10 && !validarDataDDMMAAAA(inputDataDM.value)) return;
                 inputMotivoDM.focus();
             }
         });
@@ -466,7 +468,7 @@
         inputMotivoDM.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                if (inputDataDM.value.length === 8 && !validarDataDDMMAA(inputDataDM.value)) return;
+                if (inputDataDM.value.length === 10 && !validarDataDDMMAAAA(inputDataDM.value)) return;
                 select.value = '';
                 divDataOuMotivo.style.display = 'none';
                 inputDataDM.value = '';
