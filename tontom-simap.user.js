@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tontom-Simap (Servidor)
 // @namespace    simap-tjpe
-// @version      2.3.4
+// @version      2.3.5
 // @description  Menu de observações, Prioridades, painel móvel com fila de trabalho consolidada, filtros, botões de cópia individual, sincronização em tempo real e redirecionamento de foco por página, ano 4 dígitos, SISCONDJ - valor indisponível SISBAJUD, PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno).
 // @match        https://simap.svc.tjpe.jus.br/*
 // @match        https://frontend.pje.cloud.tjpe.jus.br/*
@@ -23,6 +23,8 @@
     // Array global para armazenar os dados dos processos coletados de todas as páginas
     let processosVarridos = [];
 
+    // Diagnóstico da última varredura (linhas lidas por página, NPUs repetidos etc.)
+    let diagnosticoVarredura = { paginas: [], repetidos: [] };
     // Objeto global para armazenar os contadores de prioridades em tempo real
     let contadoresPrio = {
         1: { total: 0, fin: 0, and: 0, pen: 0, notif: 0 },
@@ -69,9 +71,63 @@
         .prio-p7 { background-color: #6366f1 !important; }
         .prio-p8 { background-color: #ec4899 !important; }
         .prio-p9 { background-color: #64748b !important; }
+        .tag-saldo { background-color: #059669 !important; color: #fff !important; }
+        .tag-incon { background-color: #d97706 !important; color: #fff !important; }
+        .tag-scga { background-color: #facc15 !important; color: #000 !important; }
     `);
 
     const BANCO_PRIORIDADES = new Map();
+    // Tags especiais da planilha (ex: "Saldo OUT 02", "INCON OUT 02"), indexadas pela chave do NPU
+    const BANCO_TAGS_ESPECIAIS = new Map();
+    // NPUs marcados com [SCGA] na planilha (mesma coluna da prioridade/saldo/inconsistência)
+    const BANCO_SCGA = new Set();
+    // Descrição curta da prioridade SCGA (ex: "Tutela/Liminar"), indexada pela chave do NPU
+    const BANCO_PRIO_DESC = new Map();
+
+    // Tabela de referência das prioridades do SCGA (Central de Atendimento / urgências).
+    // "desc" é o texto que vem na coluna C (comparado sem acento, sem pontuação e sem diferenciar maiúsculas);
+    // "tag" é o texto curto que aparece depois do número da prioridade na tag.
+    const PRIORIDADES_SCGA = [
+        { desc: "TUTELA / LIMINAR", tag: "Tutela/Liminar" },
+        { desc: "AGILIZAÇÃO DE ALVARÁ", tag: "Ag. Alvará" },
+        { desc: "BLOQUEIO / DESBLOQUEIO", tag: "Bloq./Desbloq." },
+        { desc: "HABILITAÇÃO DE ADVOGADO", tag: "Hab. Adv" },
+        { desc: "RETIFICAR O VALOR DA CAUSA", tag: "Retif. Valor da Causa" },
+        { desc: "SOLICITAÇÃO DE CERTIDÃO P/AGRAVO", tag: "Certidão Agravo" },
+        { desc: "CUSTAS - PARCELAMENTO - DIRETORIAS", tag: "Custas Parc." },
+        { desc: "CUSTAS - EMISSÃO DE GUIA - DIRETORIAS", tag: "Custas Emiss." },
+        { desc: "SOLICITAÇÃO DE OUTRAS CERTIDÕES", tag: "Outras Certidões" },
+        { desc: "BAAF", tag: "BAAF" },
+        { desc: "GAB - PRIORIDADE SOLICITADA PELO MAGISTRADO", tag: "GAB. Prio. Mag." },
+        { desc: "SOLICITAÇÃO DE CONCLUSÃO", tag: "Conclusão" },
+        { desc: "AGILIZAÇÃO DE EXPEDIENTE", tag: "Agilização Exp." },
+        { desc: "GAB - ALVARÁ DE URGÊNCIA", tag: "GAB-Alvará URGÊNCIA" },
+        { desc: "GAB - CONCLUSÃO/DECURSO DE PRAZO", tag: "GAB-Conclusão/Decurso" },
+        { desc: "GAB - TUTELAS E URGÊNCIAS", tag: "GAB-Tutela/URGÊNCIAS" },
+        { desc: "AGILIZAÇÃO - CUMPRIMENTO TUTELA DE URGÊNCIA", tag: "AGIL. Tutela URGÊNCIA" }
+    ];
+
+    function normalizarTextoPlanilha(texto) {
+        return String(texto || "")
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .toUpperCase()
+            .replace(/[^A-Z0-9]+/g, " ")
+            .trim();
+    }
+
+    const PRIORIDADES_SCGA_NORMALIZADAS = PRIORIDADES_SCGA.map(item => ({
+        chave: " " + normalizarTextoPlanilha(item.desc) + " ",
+        tag: item.tag
+    }));
+
+    // Se a célula contém alguma prioridade da tabela do SCGA, devolve o texto curto da tag (senão null).
+    // O número da prioridade NÃO é usado na comparação (vem de extrairPrioridade), só a descrição.
+    function identificarPrioridadeSCGA(textoCelula) {
+        if (!textoCelula) return null;
+        const textoNorm = " " + normalizarTextoPlanilha(textoCelula) + " ";
+        const achado = PRIORIDADES_SCGA_NORMALIZADAS.find(item => textoNorm.includes(item.chave));
+        return achado ? achado.tag : null;
+    }
 
     function extrairIdEAbas(url) {
         const idMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
@@ -132,6 +188,26 @@
         return null;
     }
 
+    function extrairTagEspecial(textoCelula) {
+        if (!textoCelula) return null;
+        const str = String(textoCelula).trim();
+        const match = str.match(/(saldo|inconsist[êe]ncias?|incon)(?:\s+plan|\s+planilha)?\s+([a-zà-ú]{3,})\s+(\d{1,2})/i);
+        if (match) {
+            const tipoRaw = match[1].toLowerCase();
+            const tipo = tipoRaw.includes('saldo') ? 'Saldo' : 'INCON';
+            const mes = match[2].substring(0, 3).toUpperCase();
+            const num = String(match[3]).padStart(2, '0');
+            return `${tipo} ${mes} ${num}`;
+        }
+        return null;
+    }
+
+    // Detecta o marcador [SCGA] (com ou sem colchetes) no texto da célula
+    function temTagSCGA(textoCelula) {
+        if (!textoCelula) return false;
+        return /(^|[^a-z0-9])scga([^a-z0-9]|$)/i.test(String(textoCelula));
+    }
+
     function processarDadosPlanilha(linhasCsv) {
         if (linhasCsv.length < 2) return;
         let headerIdx = -1;
@@ -152,6 +228,9 @@
             idxTipo = header.findIndex(h => h.includes("ORIGEM") || h.includes("PRIO"));
         }
         BANCO_PRIORIDADES.clear();
+        BANCO_TAGS_ESPECIAIS.clear();
+        BANCO_SCGA.clear();
+        BANCO_PRIO_DESC.clear();
 
         dados.forEach(row => {
             const npuBruto = row[idxNPU >= 0 ? idxNPU : 0];
@@ -159,16 +238,30 @@
             if (npuChave.length !== 20) return;
 
             let prioridadeIdentificada = 1;
+            let tagEspecialIdentificada = null;
+            let scgaIdentificada = false;
+            let descScgaIdentificada = null;
             if (idxTipo >= 0) {
                 prioridadeIdentificada = extrairPrioridade(row[idxTipo]) || 1;
+                tagEspecialIdentificada = extrairTagEspecial(row[idxTipo]);
+                descScgaIdentificada = identificarPrioridadeSCGA(row[idxTipo]);
+                scgaIdentificada = temTagSCGA(row[idxTipo]) || descScgaIdentificada !== null;
             } else {
                 for (let i = 0; i < row.length; i++) {
                     if (i === idxNPU) continue;
                     const p = extrairPrioridade(row[i]);
-                    if (p) { prioridadeIdentificada = p; break; }
+                    if (p) prioridadeIdentificada = p;
+                    const tagEsp = extrairTagEspecial(row[i]);
+                    if (tagEsp) tagEspecialIdentificada = tagEsp;
+                    const descScga = identificarPrioridadeSCGA(row[i]);
+                    if (descScga) descScgaIdentificada = descScga;
+                    if (temTagSCGA(row[i]) || descScga) scgaIdentificada = true;
                 }
             }
             BANCO_PRIORIDADES.set(npuChave, prioridadeIdentificada);
+            if (tagEspecialIdentificada) BANCO_TAGS_ESPECIAIS.set(npuChave, tagEspecialIdentificada);
+            if (scgaIdentificada) BANCO_SCGA.add(npuChave); // um único NPU só recebe a tag SCGA uma vez (Set)
+            if (descScgaIdentificada) BANCO_PRIO_DESC.set(npuChave, descScgaIdentificada);
         });
         aplicarTagsNaTela();
     }
@@ -209,12 +302,34 @@
                                     const pStr = BANCO_PRIORIDADES.get(chave); // ex: "4.1" ou "4"
                                     const pBase = parseInt(pStr, 10); // Extrai apenas a base inteira (ex: 4)
 
+                                    const descPrio = BANCO_PRIO_DESC.get(chave);
                                     const tag = document.createElement("span");
                                     tag.className = `tag-prioridade prio-p${pBase}`; // Usa a cor do grupo base
-                                    tag.textContent = `P-${pStr}`; // Adiciona o tracinho separador
+                                    // Prioridades do SCGA mostram número + descrição (ex: "P1-Tutela/Liminar")
+                                    tag.textContent = descPrio ? `P${pStr}-${descPrio}` : `P-${pStr}`; // Adiciona o tracinho separador
 
-                                    tag.title = `Prioridade Nível P${pStr}`;
+                                    tag.title = descPrio ? `Prioridade Nível P${pStr} - ${descPrio}` : `Prioridade Nível P${pStr}`;
                                     el.appendChild(tag);
+
+                                    // Tag especial da planilha (Saldo / INCON), ao lado da prioridade
+                                    const tagEspecial = BANCO_TAGS_ESPECIAIS.get(chave);
+                                    if (tagEspecial) {
+                                        const tagEspNode = document.createElement("span");
+                                        const classeTipo = tagEspecial.startsWith("Saldo") ? "tag-saldo" : "tag-incon";
+                                        tagEspNode.className = `tag-prioridade ${classeTipo}`;
+                                        tagEspNode.textContent = tagEspecial;
+                                        tagEspNode.title = tagEspecial;
+                                        el.appendChild(tagEspNode);
+                                    }
+
+                                    // Tag amarela SCGA, quando a célula da planilha traz [SCGA]
+                                    if (BANCO_SCGA.has(chave)) {
+                                        const tagScgaNode = document.createElement("span");
+                                        tagScgaNode.className = "tag-prioridade tag-scga";
+                                        tagScgaNode.textContent = "SCGA";
+                                        tagScgaNode.title = "SCGA";
+                                        el.appendChild(tagScgaNode);
+                                    }
                                 }
                             });
                         }
@@ -253,8 +368,146 @@
         { display: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", prefixo: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
         { display: "*PRECATÓRIO/RPV", prefixo: "*PRECATÓRIO/RPV", precisaExtra: false },
         { display: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", prefixo: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", precisaExtra: false },
-        { display: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", prefixo: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false }
+        { display: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", prefixo: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false },
+        { display: "SCGA-Em desacordo com a IS", prefixo: "SCGA-Em desacordo com a IS", precisaScga: true }
     ];
+
+    // Motivos do submenu "SCGA-Em desacordo com a IS"
+    const MOTIVO_SCGA_OUTROS = "Outros motivos:";
+    const MOTIVOS_SCGA_IS = [
+        "Cumprimento por ordem cronológica",
+        "Proc. com prazo aberto no sistema (ou aguardando resposta)",
+        "Solicitação anterior em andamento",
+        "Proc. em tarefa de gabinete",
+        "Conclusão anterior à solicitação",
+        "Proc. na Contadoria",
+        "Processo remetido à Instância Superior. Favor dirigir-se à Diretoria do 2º grau por meio do telefone (81) 3182.0020",
+        "Conclusão desnecessária (desp. sequenciado)",
+        "Proc. não sigiloso (adv. pode fazer a própria habilitação no sist. PJe)",
+        MOTIVO_SCGA_OUTROS
+    ];
+
+    // Cria um campo de busca (com lupa) que filtra, enquanto o servidor digita, as opções de um <select> existente.
+    // Ao escolher uma opção da lista, o <select> recebe o valor e dispara o evento "change" (a lógica atual continua valendo).
+    function criarBuscaParaSelect(selectEl, placeholder) {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'margin-bottom: 6px;';
+
+        const campo = document.createElement('div');
+        campo.style.cssText = 'display: flex; align-items: center; border: 1px solid #ced4da; border-radius: 4px; background: #fff; padding: 0 8px;';
+
+        const lupa = document.createElement('span');
+        lupa.textContent = '🔍';
+        lupa.style.cssText = 'font-size: 13px; margin-right: 6px; cursor: pointer; user-select: none;';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = placeholder;
+        input.setAttribute('autocomplete', 'off');
+        input.style.cssText = 'flex: 1; border: none; outline: none; padding: 6px 0; font-size: 13px; background: transparent; min-width: 0;';
+
+        const lista = document.createElement('div');
+        lista.style.cssText = 'display: none; margin-top: 2px; max-height: 220px; overflow-y: auto; background: #fff; border: 1px solid #ced4da; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,.15);';
+
+        campo.appendChild(lupa);
+        campo.appendChild(input);
+        wrap.appendChild(campo);
+        wrap.appendChild(lista);
+
+        let itens = [];
+        let ativo = -1;
+
+        function fechar() {
+            lista.style.display = 'none';
+            ativo = -1;
+        }
+
+        function destacar() {
+            itens.forEach((el, i) => {
+                el.style.background = i === ativo ? '#0d6efd' : '#fff';
+                el.style.color = i === ativo ? '#fff' : '#212529';
+            });
+            if (ativo >= 0 && itens[ativo]) itens[ativo].scrollIntoView({ block: 'nearest' });
+        }
+
+        function escolher(valor) {
+            input.value = '';
+            fechar();
+            selectEl.value = valor;
+            selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        function atualizar() {
+            lista.innerHTML = '';
+            itens = [];
+            ativo = -1;
+
+            const tokens = normalizarTextoPlanilha(input.value).split(' ').filter(Boolean);
+            if (tokens.length === 0) { fechar(); return; }
+
+            const achadas = Array.from(selectEl.options).filter(o => {
+                if (o.value === '') return false;
+                const textoNorm = normalizarTextoPlanilha(o.text);
+                return tokens.every(t => textoNorm.includes(t));
+            });
+
+            if (achadas.length === 0) {
+                const vazio = document.createElement('div');
+                vazio.textContent = 'Nenhuma opção encontrada';
+                vazio.style.cssText = 'padding: 6px 10px; font-size: 12px; color: #6c757d; font-style: italic;';
+                lista.appendChild(vazio);
+            } else {
+                achadas.forEach(o => {
+                    const item = document.createElement('div');
+                    item.textContent = o.text;
+                    item.style.cssText = 'padding: 6px 10px; font-size: 13px; cursor: pointer; background: #fff; color: #212529;';
+                    item.dataset.valor = o.value;
+                    // mousedown (e não click) para o campo não perder o foco antes da seleção
+                    item.addEventListener('mousedown', function(e) {
+                        e.preventDefault();
+                        escolher(item.dataset.valor);
+                    });
+                    item.addEventListener('mouseover', function() {
+                        ativo = itens.indexOf(item);
+                        destacar();
+                    });
+                    lista.appendChild(item);
+                    itens.push(item);
+                });
+                ativo = 0;
+                destacar();
+            }
+            lista.style.display = 'block';
+        }
+
+        input.addEventListener('input', atualizar);
+        input.addEventListener('focus', atualizar);
+        input.addEventListener('blur', function() { setTimeout(fechar, 150); });
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (itens.length) { ativo = (ativo + 1) % itens.length; destacar(); }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (itens.length) { ativo = (ativo - 1 + itens.length) % itens.length; destacar(); }
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (ativo >= 0 && itens[ativo]) escolher(itens[ativo].dataset.valor);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation(); // evita fechar a janela do SIMAP ao cancelar apenas a busca
+                input.value = '';
+                fechar();
+            }
+        });
+        lupa.addEventListener('click', function() { input.focus(); });
+
+        return {
+            elemento: wrap,
+            limpar: function() { input.value = ''; fechar(); },
+            focar: function() { input.focus(); }
+        };
+    }
 
     let textoPrevioAoSelect = "";
 
@@ -299,6 +552,9 @@
             o.innerText = opt.display;
             select.appendChild(o);
         });
+        // Campo de busca com lupa: filtra as observações enquanto o servidor digita (ex: "SISC" -> 3 opções do SISCONDJ)
+        const buscaObs = criarBuscaParaSelect(select, 'Buscar observação... (ex: SISC)');
+        container.appendChild(buscaObs.elemento);
         container.appendChild(select);
 
         // Div de texto extra (ex: chamados, datas)
@@ -426,6 +682,52 @@
         divImpedimento.appendChild(labelImp);
         divImpedimento.appendChild(selectImp);
         container.appendChild(divImpedimento);
+
+        // Div extra de "SCGA-Em desacordo com a IS": busca + submenu de motivos + campo livre para "Outros motivos:"
+        const divScga = document.createElement('div');
+        divScga.id = 'divScgaTontom';
+        divScga.style.cssText = 'display: none; margin-top: 8px;';
+
+        const labelScga = document.createElement('label');
+        labelScga.innerText = 'Selecione o motivo (em desacordo com a IS):';
+        labelScga.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
+
+        const selectScga = document.createElement('select');
+        selectScga.id = 'selectScgaTontom';
+        selectScga.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; background-color: #fff; cursor: pointer;';
+
+        const optScgaDefault = document.createElement('option');
+        optScgaDefault.value = '';
+        optScgaDefault.innerText = '-- Selecione o motivo --';
+        selectScga.appendChild(optScgaDefault);
+        MOTIVOS_SCGA_IS.forEach(motivo => {
+            const opt = document.createElement('option');
+            opt.value = motivo;
+            opt.innerText = motivo;
+            selectScga.appendChild(opt);
+        });
+
+        const buscaScga = criarBuscaParaSelect(selectScga, 'Buscar motivo...');
+
+        const divScgaOutros = document.createElement('div');
+        divScgaOutros.style.cssText = 'display: none; margin-top: 8px;';
+
+        const labelScgaOutros = document.createElement('label');
+        labelScgaOutros.innerText = 'Descreva o motivo pelo qual o pedido está em desacordo com a IS:';
+        labelScgaOutros.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
+
+        const inputScgaOutros = document.createElement('input');
+        inputScgaOutros.type = 'text';
+        inputScgaOutros.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;';
+
+        divScgaOutros.appendChild(labelScgaOutros);
+        divScgaOutros.appendChild(inputScgaOutros);
+
+        divScga.appendChild(labelScga);
+        divScga.appendChild(buscaScga.elemento);
+        divScga.appendChild(selectScga);
+        divScga.appendChild(divScgaOutros);
+        container.appendChild(divScga);
         txtAreaOriginal.parentNode.insertBefore(container, txtAreaOriginal);
 
         // --- Sincronização do Checkbox de Notificação (Tontom) ---
@@ -515,6 +817,11 @@
             inputMotivoDM.value = '';
             divImpedimento.style.display = 'none';
             selectImp.value = '';
+            divScga.style.display = 'none';
+            selectScga.value = '';
+            buscaScga.limpar();
+            divScgaOutros.style.display = 'none';
+            inputScgaOutros.value = '';
         }
 
         // Lógica de seleção do menu padronizado
@@ -528,8 +835,16 @@
             const opcaoSelecionada = opcoesMenu[idx];
             textoPrevioAoSelect = txtAreaOriginal.value.trim();
 
+            // Lógica do SCGA-Em desacordo com a IS (submenu de motivos)
+            if (opcaoSelecionada.precisaScga) {
+                esconderTodosExtras();
+                divScga.style.display = 'block';
+                selectScga.value = '';
+                buscaScga.focar();
+                acumularTextoOficial(opcaoSelecionada.prefixo);
+            }
             // Lógica do Impedimento (Thamyris)
-            if (opcaoSelecionada.precisaImpedimento) {
+            else if (opcaoSelecionada.precisaImpedimento) {
                 esconderTodosExtras();
                 divImpedimento.style.display = 'block';
                 selectImp.value = '';
@@ -687,6 +1002,58 @@
                 inputDataDM.value = '';
                 inputMotivoDM.value = '';
                 txtAreaOriginal.focus();
+            }
+        });
+
+        // Lógica de seleção do motivo "SCGA-Em desacordo com a IS"
+        function finalizarSelecaoScga() {
+            select.value = '';
+            divScga.style.display = 'none';
+            selectScga.value = '';
+            buscaScga.limpar();
+            divScgaOutros.style.display = 'none';
+            inputScgaOutros.value = '';
+            txtAreaOriginal.focus();
+        }
+
+        selectScga.addEventListener('change', function() {
+            const val = this.value;
+            const opcaoSelecionada = opcoesMenu[select.value];
+            if (!opcaoSelecionada || !opcaoSelecionada.precisaScga) return;
+
+            if (!val) {
+                divScgaOutros.style.display = 'none';
+                inputScgaOutros.value = '';
+                substituirTextoTemporario(opcaoSelecionada.prefixo);
+                return;
+            }
+
+            // "Outros motivos:" abre um campo livre para o servidor escrever o motivo
+            if (val === MOTIVO_SCGA_OUTROS) {
+                divScgaOutros.style.display = 'block';
+                inputScgaOutros.value = '';
+                inputScgaOutros.focus();
+                substituirTextoTemporario(opcaoSelecionada.prefixo);
+                return;
+            }
+
+            divScgaOutros.style.display = 'none';
+            inputScgaOutros.value = '';
+            substituirTextoTemporario(`${opcaoSelecionada.prefixo} | Motivo: ${val}`);
+            finalizarSelecaoScga();
+        });
+
+        inputScgaOutros.addEventListener('input', function() {
+            const opcaoSelecionada = opcoesMenu[select.value];
+            if (!opcaoSelecionada || !opcaoSelecionada.precisaScga) return;
+            const motivoLivre = this.value.trim();
+            substituirTextoTemporario(motivoLivre ? `${opcaoSelecionada.prefixo} | Motivo: ${motivoLivre}` : opcaoSelecionada.prefixo);
+        });
+
+        inputScgaOutros.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                finalizarSelecaoScga();
             }
         });
 
@@ -901,6 +1268,8 @@
                             <option value="7">Prioridade: P7</option>
                             <option value="8">Prioridade: P8</option>
                             <option value="9">Prioridade: P9</option>
+                            <option value="Saldo">Origem: Saldo</option>
+                            <option value="INCON">Origem: Inconsistências (INCON)</option>
                             <option value="S/P">Prioridade: Sem Prio (S/P)</option>
                         </select>
                         <button id="btnFiltroNotif" data-ativo="false" style="flex: 1; padding: 3px 6px; font-size: 11px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; color: #495057; font-weight: bold; cursor: pointer; height: 26px; transition: all 0.2s; white-space: nowrap;">
@@ -1169,6 +1538,7 @@
     // Sincroniza em tempo real as alterações feitas pelo usuário na página atual, sem precisar re-varrer
     function atualizarDadosPaginaAtual() {
         if (processosVarridos.length === 0) return; // Só roda se a varredura inicial já ocorreu
+        if (varreduraAtiva) return; // Durante a varredura os dados são controlados somente pelo laço de varredura
 
         const regexValidaNPU = /\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}/;
         const seletorLinhas = 'tr[data-cy="entityTable"], tbody tr';
@@ -1214,7 +1584,7 @@
     }
 
     // Recalcula e redesenha o painel geral de contadores
-    function recalcularContadoresGlobais() {
+    function recalcularContadoresGlobais(processando = false) {
         let totalGeral = processosVarridos.length;
         let finGeral = 0;
         let andGeral = 0;
@@ -1239,7 +1609,7 @@
             }
         });
 
-        atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, false);
+        atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, processando);
     }
 
     // Atualiza a visualização da fila de trabalho com botões de ação corretos e filtros dinâmicos
@@ -1280,10 +1650,14 @@
             ordenados = ordenados.filter(p => p.status === statusFiltro);
         }
 
-        // 2. Aplica o filtro de Prioridade (P1 a P9)
+        // 2. Aplica o filtro de Prioridade (P1 a P9) ou Origem (Saldo / INCON)
         if (prioFiltro !== "todas") {
             if (prioFiltro === "S/P") {
                 ordenados = ordenados.filter(p => p.prioridade === "S/P");
+            } else if (prioFiltro === "Saldo") {
+                ordenados = ordenados.filter(p => p.tagEspecial && p.tagEspecial.startsWith("Saldo"));
+            } else if (prioFiltro === "INCON") {
+                ordenados = ordenados.filter(p => p.tagEspecial && p.tagEspecial.startsWith("INCON"));
             } else {
                 ordenados = ordenados.filter(p => {
                     const pBase = parseInt(p.prioridade, 10);
@@ -1332,6 +1706,16 @@
 
             const tagEstilo = `display:inline-block; padding:1px 4px; font-weight:bold; font-size:9px; color:#fff; border-radius:3px; background:${corPrio};`;
 
+            let tagEspHtml = "";
+            if (p.tagEspecial) {
+                const corEsp = p.tagEspecial.startsWith("Saldo") ? "#059669" : "#d97706";
+                tagEspHtml = `<span style="display:inline-block; margin-left:4px; padding:1px 4px; font-weight:bold; font-size:9px; color:#fff; border-radius:3px; background:${corEsp};">${p.tagEspecial}</span>`;
+            }
+
+            if (p.scga) {
+                tagEspHtml += `<span style="display:inline-block; margin-left:4px; padding:1px 4px; font-weight:bold; font-size:9px; color:#000; border-radius:3px; background:#facc15;">SCGA</span>`;
+            }
+
             // O NPU vira um link interno limpo
             const linkDisplay = `<a href="#" class="npu-link-click" data-chave="${p.chave}" data-pagina="${p.pagina}" title="Ir para este processo na Tabela do SIMAP (Pág ${p.pagina})" style="color:#0d6efd; font-weight:bold; text-decoration:underline; cursor:pointer;">${p.npu}</a>`;
 
@@ -1344,8 +1728,8 @@
 
             html += `
                 <tr style="border-bottom:1px solid #dee2e6; background:#fff; height:24px;">
-                    <td style="padding:4px; text-align:center;"><span style="${tagEstilo}">P${p.prioridade}</span></td>
-                    <td style="padding:4px; word-break:break-all; display: flex; align-items: center;">${linkDisplay} ${botaoCopiar}</td>
+                    <td style="padding:4px; text-align:center;"><span style="${tagEstilo} white-space:nowrap;">P${p.prioridade}${p.descPrio ? '-' + p.descPrio : ''}</span></td>
+                    <td style="padding:4px; word-break:break-all; display: flex; align-items: center; flex-wrap: wrap;">${linkDisplay}${tagEspHtml} ${botaoCopiar}</td>
                     <td style="padding:4px; text-align:center; color:${statusCor}; font-weight:bold;">${p.status}</td>
                     <td style="padding:4px; text-align:center;">${p.notif > 0 ? `<span style="color:#dc3545; font-weight:bold;">⚠️ ${p.notif}</span>` : '-'}</td>
                 </tr>
@@ -1419,6 +1803,57 @@
         }
     }
 
+    // Retorna apenas as linhas da tabela real do SIMAP (ignora painel, controles e menu do próprio script)
+    function obterLinhasTabelaReal() {
+        return Array.from(document.querySelectorAll('tr[data-cy="entityTable"], tbody tr'))
+            .filter(linha => !linha.closest('#painelContadoresServidor') &&
+                             !linha.closest('#tontomControlesServidor') &&
+                             !linha.closest('#containerMenuTontom'));
+    }
+
+    // Assinatura da página exibida (lista de NPUs das linhas). Usada para saber quando a paginação realmente trocou de página
+    function assinaturaPaginaAtual() {
+        const regex = /\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}/;
+        const chaves = [];
+        obterLinhasTabelaReal().forEach(linha => {
+            const m = childText(linha).match(regex);
+            if (m) chaves.push(limparNPU(m[0]));
+        });
+        return chaves.join('|');
+    }
+
+    function botaoPaginadorDisponivel(btn) {
+        return !!btn && !btn.disabled &&
+               btn.getAttribute('aria-disabled') !== 'true' &&
+               !btn.classList.contains('p-disabled') &&
+               !btn.classList.contains('ui-state-disabled');
+    }
+
+    // Espera a tabela trocar de página (assinatura diferente da anterior) e estabilizar (linhas/dropdowns renderizados).
+    // Retorna true se a página mudou, false se estourou o tempo sem mudança.
+    async function aguardarTrocaDePagina(assinaturaAnterior, timeoutMs = 10000) {
+        const inicio = Date.now();
+        let mudou = false;
+        while (Date.now() - inicio < timeoutMs) {
+            if (abortarVarredura) return false;
+            await esperar(200);
+            const atual = assinaturaPaginaAtual();
+            if (atual !== '' && atual !== assinaturaAnterior) { mudou = true; break; }
+        }
+        if (!mudou) return false;
+
+        // Aguarda estabilização: assinatura igual em duas leituras consecutivas
+        let ultima = assinaturaPaginaAtual();
+        for (let i = 0; i < 15; i++) {
+            await esperar(300);
+            const agora = assinaturaPaginaAtual();
+            if (agora === ultima) break;
+            ultima = agora;
+        }
+        await esperar(300); // tempo extra para os dropdowns de status/ícones de notificação renderizarem
+        return true;
+    }
+
     async function rodarVarreduraServidor() {
         if (varreduraAtiva) return;
         varreduraAtiva = true;
@@ -1426,6 +1861,21 @@
         abortarVarredura = false;
         atualizarBotoesUI();
 
+        try {
+            await executarVarreduraServidor();
+        } catch (err) {
+            console.error("😸 [Tontom] Erro durante a varredura:", err);
+        } finally {
+            // Garante que o botão nunca fique travado em "Processando..." após um erro
+            varreduraAtiva = false;
+            atualizarBotoesUI();
+            // Fonte única da verdade: recalcula tudo a partir de processosVarridos (evita somar sobre valores antigos)
+            recalcularContadoresGlobais();
+            atualizarFilaTrabalhoPainel();
+        }
+    }
+
+    async function executarVarreduraServidor() {
         criarPainelServidor();
         const painel = document.getElementById("painelContadoresServidor");
         painel.style.display = "block";
@@ -1447,23 +1897,87 @@
             document.getElementById(`p${i}-alerta`).innerText = "-";
         }
 
+        // RESET TOTAL: cada clique em "Gerar Contadores" recalcula tudo do zero
         resetarContadoresPrioridade();
         processosVarridos = [];
+        diagnosticoVarredura = { paginas: [], repetidos: [], passadas: [], esperado: null, ordenacao: '' };
         atualizarFilaTrabalhoPainel("Iniciando a varredura...");
 
-        const firstBtn = document.querySelector('.p-paginator-first, .ui-paginator-first, [aria-label="Primeira Página"], [aria-label="First Page"]');
-        if (firstBtn && !firstBtn.disabled && firstBtn.getAttribute('aria-disabled') !== 'true') {
-            firstBtn.click();
-            await esperar(1800);
+        const esperadoInicial = lerTotalEsperadoPaginador();
+        const totalEsperado = esperadoInicial ? esperadoInicial.total : null;
+        diagnosticoVarredura.esperado = totalEsperado;
+
+        // O SIMAP pagina no servidor com ordem instável: o mesmo processo pode aparecer em duas páginas e outro
+        // não aparecer em nenhuma. Por isso (1) tentamos ordenar por NPU (chave única) e (2) repetimos a varredura
+        // juntando os resultados (sem duplicar) até cobrir o total informado pelo paginador.
+        atualizarFilaTrabalhoPainel("Verificando ordenação da tabela...");
+        diagnosticoVarredura.ordenacao = await tentarOrdenarPorNPU();
+        await irParaPrimeiraPagina();
+
+        const processosMapeados = new Map(); // chave NPU -> entrada em processosVarridos
+        const MAX_PASSADAS = 8;
+
+        for (let passada = 1; passada <= MAX_PASSADAS; passada++) {
+            if (abortarVarredura) break;
+            const unicosAntes = processosVarridos.length;
+            const repetidosAntes = contarRepetidosDiagnostico();
+
+            await varrerTodasAsPaginas(passada, processosMapeados);
+
+            const novos = processosVarridos.length - unicosAntes;
+            const repetidosNaPassada = contarRepetidosDiagnostico() - repetidosAntes;
+            diagnosticoVarredura.passadas.push({ passada: passada, novos: novos, totalUnicos: processosVarridos.length, repetidos: repetidosNaPassada });
+
+            if (totalEsperado !== null && processosVarridos.length >= totalEsperado) break; // já cobriu tudo
+            if (repetidosNaPassada === 0) break;     // ordem estável: uma passada basta
+            if (passada > 1 && novos === 0) break;   // nada novo: o restante são repetições reais do SIMAP
+
+            await irParaPrimeiraPagina();
         }
 
-        let totalGeral = 0;
-        let finGeral = 0;
-        let andGeral = 0;
-        let notifGeral = 0;
-        let paginaAtual = 1;
-        const processosMapeados = new Set();
+        // O fechamento (liberar botão, recalcular contadores a partir de processosVarridos e redesenhar a fila)
+        // é feito no finally de rodarVarreduraServidor.
+        exibirDiagnosticoVarredura();
+    }
+
+    function contarRepetidosDiagnostico() {
+        return diagnosticoVarredura.paginas.reduce((s, p) => s + p.repetidos, 0);
+    }
+
+    async function irParaPrimeiraPagina() {
+        const firstBtn = document.querySelector('.p-paginator-first, .ui-paginator-first, [aria-label="Primeira Página"], [aria-label="First Page"]');
+        if (botaoPaginadorDisponivel(firstBtn)) {
+            const assinaturaAntes = assinaturaPaginaAtual();
+            firstBtn.click();
+            // Espera a tabela realmente voltar para a página 1 (em vez de um tempo fixo que podia varrer dados velhos)
+            await aguardarTrocaDePagina(assinaturaAntes);
+        }
+    }
+
+    // Tenta ordenar a tabela pela coluna do NPU/Processo (valor único), para a paginação ficar estável
+    async function tentarOrdenarPorNPU() {
+        const ths = Array.from(document.querySelectorAll('th'))
+            .filter(th => !th.closest('#painelContadoresServidor') && !th.closest('#tontomControlesServidor') && !th.closest('#containerMenuTontom'));
+        const th = ths.find(t => /processo|npu/i.test(t.innerText || ''));
+        if (!th) return 'coluna NPU/Processo não encontrada';
+
+        const sortavel = th.matches('[psortablecolumn], .p-sortable-column, [aria-sort]') ||
+                         !!th.querySelector('p-sorticon, .p-sortable-column-icon, [class*="sort"]');
+        if (!sortavel) return 'coluna NPU/Processo não é ordenável';
+
+        const estado = th.getAttribute('aria-sort') || 'none';
+        if (estado === 'ascending' || estado === 'descending') return 'já ordenada por NPU (' + estado + ')';
+
+        const assinaturaAntes = assinaturaPaginaAtual();
+        th.click();
+        await aguardarTrocaDePagina(assinaturaAntes, 6000);
+        return 'ordenada por clique no cabeçalho (aria-sort=' + (th.getAttribute('aria-sort') || '?') + ')';
+    }
+
+    // Percorre todas as páginas uma vez, acrescentando em processosVarridos apenas NPUs ainda não vistos
+    async function varrerTodasAsPaginas(passada, processosMapeados) {
         const regexValidaNPU = /\d{7}[-.]?\d{2}[-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4}/;
+        let paginaAtual = 1;
 
         while (true) {
             if (abortarVarredura) break;
@@ -1473,78 +1987,120 @@
             }
             if (abortarVarredura) break;
 
-            atualizarFilaTrabalhoPainel(`Varrendo processos da Página ${paginaAtual}...`);
+            atualizarFilaTrabalhoPainel(`Passada ${passada}: varrendo processos da Página ${paginaAtual}...`);
 
-            const linhas = document.querySelectorAll('tr[data-cy="entityTable"], tbody tr');
+            // Ignora linhas do painel/menu do próprio script (evita contar a Fila de Trabalho como se fosse a tabela do SIMAP)
+            const linhas = obterLinhasTabelaReal();
+            const diagPagina = { passada: passada, pagina: paginaAtual, linhas: linhas.length, comNpu: 0, novos: 0, repetidos: 0, semNpu: 0, multiNpu: 0 };
+            diagnosticoVarredura.paginas.push(diagPagina);
 
             linhas.forEach(linha => {
                 const textoLinha = childText(linha);
                 if (!textoLinha || textoLinha.includes("Nenhum registro encontrado")) return;
 
                 const matchNPU = textoLinha.match(regexValidaNPU);
-                if (!matchNPU) return;
+                if (!matchNPU) { diagPagina.semNpu++; return; }
+                diagPagina.comNpu++;
+                const todosNpus = textoLinha.match(new RegExp(regexValidaNPU.source, 'g')) || [];
+                if (new Set(todosNpus.map(limparNPU)).size > 1) diagPagina.multiNpu++;
 
                 const npuFormatado = matchNPU[0];
                 const chaveNpu = limparNPU(npuFormatado);
 
-                if (processosMapeados.has(chaveNpu)) return;
-                processosMapeados.add(chaveNpu);
+                const existente = processosMapeados.get(chaveNpu);
+                if (existente) {
+                    diagPagina.repetidos++;
+                    if (passada === 1) {
+                        diagnosticoVarredura.repetidos.push({
+                            npu: npuFormatado,
+                            paginaOrigem: existente.pagina,
+                            paginaAtual: paginaAtual,
+                            linha: textoLinha.replace(/\s+/g, ' ').substring(0, 200)
+                        });
+                    }
+                    return;
+                }
+                diagPagina.novos++;
 
-                totalGeral++;
+                const qtdLivrosNaLinha = inlinePiBooks(linha).length;
 
-                const livros = inlinePiBooks(linha);
-                const qtdLivrosNaLinha = livros.length;
-                notifGeral += qtdLivrosNaLinha;
-
-                let isFin = false;
-                let isAnd = false;
                 let statusText = "Pendente";
                 const dp = inlineDropdownText(linha);
                 if (dp) {
-                    if (dp.includes("Finalizado")) { finGeral++; isFin = true; statusText = "Finalizado"; }
-                    else if (dp.includes("Em andamento")) { andGeral++; isAnd = true; statusText = "Em andamento"; }
+                    if (dp.includes("Finalizado")) statusText = "Finalizado";
+                    else if (dp.includes("Em andamento")) statusText = "Em andamento";
                 }
 
-                let prioridadeIdentificada = null;
-                if (BANCO_PRIORIDADES.has(chaveNpu)) {
-                    prioridadeIdentificada = BANCO_PRIORIDADES.get(chaveNpu);
-                    const nivelPrioBase = parseInt(prioridadeIdentificada, 10); // Agrupa 4.1 e 4.2 no contador 4
-
-                    if (nivelPrioBase >= 1 && nivelPrioBase <= 4) {
-                        contadoresPrio[nivelPrioBase].total++;
-                        contadoresPrio[nivelPrioBase].notif += qtdLivrosNaLinha;
-                        if (isFin) contadoresPrio[nivelPrioBase].fin++;
-                        else if (isAnd) contadoresPrio[nivelPrioBase].and++;
-                    }
-                }
-
+                const prioridadeIdentificada = BANCO_PRIORIDADES.has(chaveNpu) ? BANCO_PRIORIDADES.get(chaveNpu) : null;
                 const parsedPrio = prioridadeIdentificada ? parseFloat(String(prioridadeIdentificada).replace(',', '.')) : 999;
 
-                processosVarridos.push({
+                const entrada = {
                     npu: npuFormatado,
                     chave: chaveNpu,
                     prioridade: prioridadeIdentificada || "S/P",
+                    tagEspecial: BANCO_TAGS_ESPECIAIS.get(chaveNpu) || null,
+                    scga: BANCO_SCGA.has(chaveNpu),
+                    descPrio: BANCO_PRIO_DESC.get(chaveNpu) || null,
                     prioValor: parsedPrio,
                     status: statusText,
                     notif: qtdLivrosNaLinha,
                     pagina: paginaAtual
-                });
+                };
+                processosVarridos.push(entrada);
+                processosMapeados.set(chaveNpu, entrada);
             });
 
-            atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, true);
+            // Progresso parcial: sempre calculado a partir de processosVarridos (fonte única da verdade)
+            recalcularContadoresGlobais(true);
 
             const nextBtn = document.querySelector('.p-paginator-next, .ui-paginator-next, [aria-label="Página Seguinte"], [aria-label="Next Page"]');
-            if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true') break;
+            if (!botaoPaginadorDisponivel(nextBtn)) break;
 
+            const assinaturaAntes = assinaturaPaginaAtual();
             nextBtn.click();
+            // Só avança quando a tabela realmente trocou de página; evita pular páginas ou re-varrer dados antigos
+            const trocou = await aguardarTrocaDePagina(assinaturaAntes);
+            if (!trocou) break;
             paginaAtual++;
-            await esperar(1800);
         }
+    }
 
-        varreduraAtiva = false;
-        atualizarBotoesUI();
-        atualizarValoresPainel(totalGeral, finGeral, andGeral, notifGeral, false);
-        atualizarFilaTrabalhoPainel();
+    // Lê do paginador o total de registros informado pelo SIMAP (ex.: "Mostrando 1 a 20 de 260"), se existir
+    function lerTotalEsperadoPaginador() {
+        const txt = (document.body.innerText || '').replace(/\s+/g, ' ');
+        const m = txt.match(/Mostrando\s+\d+\s*[-–]\s*\d+\s+de\s+(\d+)/i) || txt.match(/\bde\s+(\d+)\s+(?:resultados|registros|itens)/i);
+        return m ? { total: parseInt(m[1], 10), texto: m[0] } : null;
+    }
+
+    // Diagnóstico da varredura: mostra no painel e no console (F12) o que foi lido em cada página
+    function exibirDiagnosticoVarredura() {
+        const d = diagnosticoVarredura;
+        const esperado = lerTotalEsperadoPaginador();
+        const linhasLidas = d.paginas.reduce((s, p) => s + p.comNpu, 0);
+        const msg = `🔎 ${d.passadas.length} passada(s) | ${linhasLidas} linhas lidas | ${processosVarridos.length} únicos` +
+                    (esperado ? ` | paginador informa: ${esperado.total}` : ' | paginador: total não encontrado') +
+                    ` | ordenação: ${d.ordenacao || 'n/d'}`;
+
+        console.group("😸 [Tontom] Diagnóstico da varredura");
+        console.log(msg);
+        if (esperado) console.log("Texto do paginador:", esperado.texto);
+        console.table(d.passadas);
+        console.table(d.paginas);
+        if (d.repetidos.length) console.table(d.repetidos);
+        console.groupEnd();
+        window.tontomDiagnostico = { passadas: d.passadas, paginas: d.paginas, repetidos: d.repetidos, esperado: esperado, ordenacao: d.ordenacao };
+
+        const painel = document.getElementById("painelContadoresServidor");
+        const lista = document.getElementById("listaFilaTrabalho");
+        if (!painel || !lista) return;
+        let el = document.getElementById("tontomDiagScan");
+        if (!el) {
+            el = document.createElement("div");
+            el.id = "tontomDiagScan";
+            el.style.cssText = "font-size:10px; color:#6c757d; padding:2px 4px; font-family:sans-serif;";
+            lista.parentElement.insertBefore(el, lista);
+        }
+        el.innerText = msg;
     }
 
     function inlinePiBooks(linha) {
