@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tontom-Simap (Servidor)
 // @namespace    simap-tjpe
-// @version      2.3.5
+// @version      2.3.6
 // @description  Menu de observações, Prioridades, painel móvel com fila de trabalho consolidada, filtros, botões de cópia individual, sincronização em tempo real e redirecionamento de foco por página, ano 4 dígitos, SISCONDJ - valor indisponível SISBAJUD, PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno).
 // @match        https://simap.svc.tjpe.jus.br/*
 // @match        https://frontend.pje.cloud.tjpe.jus.br/*
@@ -363,6 +363,7 @@
         { display: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", prefixo: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência)", precisaExtra: true, labelExtra: "Informe o Nº do processo:", rotuloExtra: "Nº" },
         { display: "*PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno)", prefixo: "*PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno)", precisaExtra: false },
         { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, tipoExtra: "dataOuMotivo", labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
+        { display: "*ARQUIVO DEFINITIVO", prefixo: "*ARQUIVO DEFINITIVO", precisaExtra: false },
         { display: "*ERRO DE FLUXO (Nº do Chamado ou Falha na Migração)", prefixo: "*ERRO DE FLUXO", precisaExtra: true, labelExtra: "Informe o Nº do Chamado ou escreva falha na migração:", rotuloExtra: "Chamado" },
         { display: "*LEILÃO", prefixo: "*LEILÃO", precisaExtra: false },
         { display: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", prefixo: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
@@ -375,16 +376,11 @@
     // Motivos do submenu "SCGA-Em desacordo com a IS"
     const MOTIVO_SCGA_OUTROS = "Outros motivos:";
     const MOTIVOS_SCGA_IS = [
-        "Cumprimento por ordem cronológica",
-        "Proc. com prazo aberto no sistema (ou aguardando resposta)",
-        "Solicitação anterior em andamento",
-        "Proc. em tarefa de gabinete",
-        "Conclusão anterior à solicitação",
-        "Proc. na Contadoria",
-        "Processo remetido à Instância Superior. Favor dirigir-se à Diretoria do 2º grau por meio do telefone (81) 3182.0020",
-        "Conclusão desnecessária (desp. sequenciado)",
-        "Proc. não sigiloso (adv. pode fazer a própria habilitação no sist. PJe)",
-        MOTIVO_SCGA_OUTROS
+        "Proc. com prazo aberto",
+        'Proc. em tarefa de Gabinete/Contadoria (exceto pedido de "outras certidões" e "hab. de advogado")',
+        "Processo está no 2º grau",
+        "solicitação não atendida- despacho sequenciado ou outros cumprimentos pela diretoria",
+        "Proc. não sigiloso (adv. pode fazer a própria habilitação no sist. PJe)"
     ];
 
     // Cria um campo de busca (com lupa) que filtra, enquanto o servidor digita, as opções de um <select> existente.
@@ -689,7 +685,7 @@
         divScga.style.cssText = 'display: none; margin-top: 8px;';
 
         const labelScga = document.createElement('label');
-        labelScga.innerText = 'Selecione o motivo (em desacordo com a IS):';
+        labelScga.innerText = 'selecione o motivo pelo qual não é possível cumprir o pedido solicitado no SCGA:';
         labelScga.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
 
         const selectScga = document.createElement('select');

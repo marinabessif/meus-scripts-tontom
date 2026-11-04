@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          Tontom-Simap - Gestores
 // @namespace     simap-tjpe
-// @version      1.8.3
-// @description   Extensão para gestores: injeta tags de prioridade (P1-P9), tags de Saldo/INCON nos NPUs, menu de observações padronizadas e botão flutuante Colar NPU e Buscar, ano 4 dígitos, SISCONDJ - valor indisponível SISBAJUD, PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno)
+// @version      1.8.4
+// @description   Extensão para gestores: injeta tags de prioridade (P1-P9), tags de Saldo/INCON/SCGA nos NPUs, busca no menu, opção SCGA-Em desacordo com a IS, menu de observações padronizadas e botão flutuante Colar NPU e Buscar
 // @match         https://simap.svc.tjpe.jus.br/*
 // @match         https://*.tjpe.jus.br/*
 // @match         https://*.pje.cloud.tjpe.jus.br/*
@@ -19,7 +19,7 @@
     const isPJe = window.location.hostname.includes("pje");
     const URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1RFS3XkGQ7Ga1NqCMXJmqYGcR-JBCXtYB7r51quVb0yE/edit?gid=1744875210";
 
-    console.log("😸 [Tontom] Iniciando extensão Gestores v1.8.3...");
+    console.log("😸 [Tontom] Iniciando extensão Gestores v1.8.4...");
 
     GM_addStyle(`
 @media print {
@@ -48,9 +48,64 @@
 .prio-p9 { background:#64748b !important; }
 .tag-saldo { background:#059669 !important; color:#fff !important; }
 .tag-incon { background:#d97706 !important; color:#fff !important; }
+.tag-scga { background:#facc15 !important; color:#000 !important; }
 `);
 
     const BANCO_PRIORIDADES = new Map();
+    // NPUs marcados com [SCGA] na planilha (mesma coluna da prioridade/saldo/inconsistência)
+    const BANCO_SCGA = new Set();
+    // Descrição curta da prioridade SCGA (ex: "Tutela/Liminar"), indexada pela chave do NPU
+    const BANCO_PRIO_DESC = new Map();
+
+    // Tabela de referência das prioridades do SCGA (Central de Atendimento / urgências).
+    // "desc" é o texto que vem na coluna C (comparado sem acento, sem pontuação e sem diferenciar maiúsculas);
+    // "tag" é o texto curto que aparece depois do número da prioridade na tag.
+    const PRIORIDADES_SCGA = [
+        { desc: "TUTELA / LIMINAR", tag: "Tutela/Liminar" },
+        { desc: "AGILIZAÇÃO DE ALVARÁ", tag: "Ag. Alvará" },
+        { desc: "BLOQUEIO / DESBLOQUEIO", tag: "Bloq./Desbloq." },
+        { desc: "HABILITAÇÃO DE ADVOGADO", tag: "Hab. Adv" },
+        { desc: "RETIFICAR O VALOR DA CAUSA", tag: "Retif. Valor da Causa" },
+        { desc: "SOLICITAÇÃO DE CERTIDÃO P/AGRAVO", tag: "Certidão Agravo" },
+        { desc: "CUSTAS - PARCELAMENTO - DIRETORIAS", tag: "Custas Parc." },
+        { desc: "CUSTAS - EMISSÃO DE GUIA - DIRETORIAS", tag: "Custas Emiss." },
+        { desc: "SOLICITAÇÃO DE OUTRAS CERTIDÕES", tag: "Outras Certidões" },
+        { desc: "BAAF", tag: "BAAF" },
+        { desc: "GAB - PRIORIDADE SOLICITADA PELO MAGISTRADO", tag: "GAB. Prio. Mag." },
+        { desc: "SOLICITAÇÃO DE CONCLUSÃO", tag: "Conclusão" },
+        { desc: "AGILIZAÇÃO DE EXPEDIENTE", tag: "Agilização Exp." },
+        { desc: "GAB - ALVARÁ DE URGÊNCIA", tag: "GAB-Alvará URGÊNCIA" },
+        { desc: "GAB - CONCLUSÃO/DECURSO DE PRAZO", tag: "GAB-Conclusão/Decurso" },
+        { desc: "GAB - TUTELAS E URGÊNCIAS", tag: "GAB-Tutela/URGÊNCIAS" },
+        { desc: "AGILIZAÇÃO - CUMPRIMENTO TUTELA DE URGÊNCIA", tag: "AGIL. Tutela URGÊNCIA" }
+    ];
+
+    function normalizarTextoPlanilha(texto) {
+        return String(texto || "")
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .toUpperCase()
+            .replace(/[^A-Z0-9]+/g, " ")
+            .trim();
+    }
+
+    const PRIORIDADES_SCGA_NORMALIZADAS = PRIORIDADES_SCGA.map(item => ({
+        chave: " " + normalizarTextoPlanilha(item.desc) + " ",
+        tag: item.tag
+    }));
+
+    // Se a célula contém alguma prioridade da tabela do SCGA, devolve o texto curto da tag (senão null).
+    function identificarPrioridadeSCGA(textoCelula) {
+        if (!textoCelula) return null;
+        const textoNorm = " " + normalizarTextoPlanilha(textoCelula) + " ";
+        const achado = PRIORIDADES_SCGA_NORMALIZADAS.find(item => textoNorm.includes(item.chave));
+        return achado ? achado.tag : null;
+    }
+
+    // Detecta o marcador [SCGA] (com ou sem colchetes) no texto da célula
+    function temTagSCGA(textoCelula) {
+        if (!textoCelula) return false;
+        return /(^|[^a-z0-9])scga([^a-z0-9]|$)/i.test(String(textoCelula));
+    }
 
     // Cria um pequeno indicador visual de que a extensão está carregada (Apenas no SIMAP)
     function mostrarAvisoCarregamento() {
@@ -84,13 +139,146 @@
         { display: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência - informar nº)", prefixo: "*PROCESSO SUSPENSO (Julg. Agravo/Conflito de competência)", precisaExtra: true, labelExtra: "Informe o Nº do processo:", rotuloExtra: "Nº" },
         { display: "*PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno)", prefixo: "*PROCESSO SUSPENSO (Até ulterior deliberação - Sem data de retorno)", precisaExtra: false },
         { display: "*ARQUIVO PROVISÓRIO (Data de retorno OU Motivo)", prefixo: "*ARQUIVO PROVISÓRIO", precisaExtra: true, tipoExtra: "dataOuMotivo", labelExtra: "Informe a Data ou Motivo:", rotuloExtra: "Info" },
+        { display: "*ARQUIVO DEFINITIVO", prefixo: "*ARQUIVO DEFINITIVO", precisaExtra: false },
         { display: "*ERRO DE FLUXO (Nº do Chamado ou Falha na Migração)", prefixo: "*ERRO DE FLUXO", precisaExtra: true, labelExtra: "Informe o Nº do Chamado ou escreva falha na migração:", rotuloExtra: "Chamado" },
         { display: "*LEILÃO", prefixo: "*LEILÃO", precisaExtra: false },
         { display: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", prefixo: "*REC. JUD./FALÊNCIA (não engloba habilitação de crédito)", precisaExtra: false },
         { display: "*PRECATÓRIO/RPV", prefixo: "*PRECATÓRIO/RPV", precisaExtra: false },
         { display: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", prefixo: "*CENTRAL DE AGILIZAÇÃO (SEM FLUXO)", precisaExtra: false },
-        { display: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", prefixo: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false }
+        { display: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", prefixo: "*INTEGRALMENTE CUMPRIDO POR OUTRO SERVIDOR", precisaExtra: false },
+        { display: "SCGA-Em desacordo com a IS", prefixo: "SCGA-Em desacordo com a IS", precisaScga: true }
     ];
+
+    // Motivos do submenu "SCGA-Em desacordo com a IS"
+    const MOTIVO_SCGA_OUTROS = "Outros motivos:";
+    const MOTIVOS_SCGA_IS = [
+        "Proc. com prazo aberto",
+        'Proc. em tarefa de Gabinete/Contadoria (exceto pedido de "outras certidões" e "hab. de advogado")',
+        "Processo está no 2º grau",
+        "solicitação não atendida- despacho sequenciado ou outros cumprimentos pela diretoria",
+        "Proc. não sigiloso (adv. pode fazer a própria habilitação no sist. PJe)"
+    ];
+
+    // Cria um campo de busca (com lupa) que filtra, enquanto o servidor digita, as opções de um <select> existente.
+    // Ao escolher uma opção da lista, o <select> recebe o valor e dispara o evento "change" (a lógica atual continua valendo).
+    function criarBuscaParaSelect(selectEl, placeholder) {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'margin-bottom: 6px;';
+
+        const campo = document.createElement('div');
+        campo.style.cssText = 'display: flex; align-items: center; border: 1px solid #ced4da; border-radius: 4px; background: #fff; padding: 0 8px;';
+
+        const lupa = document.createElement('span');
+        lupa.textContent = '🔍';
+        lupa.style.cssText = 'font-size: 13px; margin-right: 6px; cursor: pointer; user-select: none;';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = placeholder;
+        input.setAttribute('autocomplete', 'off');
+        input.style.cssText = 'flex: 1; border: none; outline: none; padding: 6px 0; font-size: 13px; background: transparent; min-width: 0;';
+
+        const lista = document.createElement('div');
+        lista.style.cssText = 'display: none; margin-top: 2px; max-height: 220px; overflow-y: auto; background: #fff; border: 1px solid #ced4da; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,.15);';
+
+        campo.appendChild(lupa);
+        campo.appendChild(input);
+        wrap.appendChild(campo);
+        wrap.appendChild(lista);
+
+        let itens = [];
+        let ativo = -1;
+
+        function fechar() {
+            lista.style.display = 'none';
+            ativo = -1;
+        }
+
+        function destacar() {
+            itens.forEach((el, i) => {
+                el.style.background = i === ativo ? '#0d6efd' : '#fff';
+                el.style.color = i === ativo ? '#fff' : '#212529';
+            });
+            if (ativo >= 0 && itens[ativo]) itens[ativo].scrollIntoView({ block: 'nearest' });
+        }
+
+        function escolher(valor) {
+            input.value = '';
+            fechar();
+            selectEl.value = valor;
+            selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        function atualizar() {
+            lista.innerHTML = '';
+            itens = [];
+            ativo = -1;
+
+            const tokens = normalizarTextoPlanilha(input.value).split(' ').filter(Boolean);
+            if (tokens.length === 0) { fechar(); return; }
+
+            const achadas = Array.from(selectEl.options).filter(o => {
+                if (o.value === '') return false;
+                const textoNorm = normalizarTextoPlanilha(o.text);
+                return tokens.every(t => textoNorm.includes(t));
+            });
+
+            if (achadas.length === 0) {
+                const vazio = document.createElement('div');
+                vazio.textContent = 'Nenhuma opção encontrada';
+                vazio.style.cssText = 'padding: 6px 10px; font-size: 12px; color: #6c757d; font-style: italic;';
+                lista.appendChild(vazio);
+            } else {
+                achadas.forEach(o => {
+                    const item = document.createElement('div');
+                    item.textContent = o.text;
+                    item.style.cssText = 'padding: 6px 10px; font-size: 13px; cursor: pointer; background: #fff; color: #212529;';
+                    item.dataset.valor = o.value;
+                    item.addEventListener('mousedown', function(e) {
+                        e.preventDefault();
+                        escolher(item.dataset.valor);
+                    });
+                    item.addEventListener('mouseover', function() {
+                        ativo = itens.indexOf(item);
+                        destacar();
+                    });
+                    lista.appendChild(item);
+                    itens.push(item);
+                });
+                ativo = 0;
+                destacar();
+            }
+            lista.style.display = 'block';
+        }
+
+        input.addEventListener('input', atualizar);
+        input.addEventListener('focus', atualizar);
+        input.addEventListener('blur', function() { setTimeout(fechar, 150); });
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (itens.length) { ativo = (ativo + 1) % itens.length; destacar(); }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (itens.length) { ativo = (ativo - 1 + itens.length) % itens.length; destacar(); }
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (ativo >= 0 && itens[ativo]) escolher(itens[ativo].dataset.valor);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                input.value = '';
+                fechar();
+            }
+        });
+        lupa.addEventListener('click', function() { input.focus(); });
+
+        return {
+            elemento: wrap,
+            limpar: function() { input.value = ''; fechar(); },
+            focar: function() { input.focus(); }
+        };
+    }
 
     let textoPrevioAoSelect = "";
 
@@ -123,6 +311,9 @@
             o.innerText = opt.display;
             select.appendChild(o);
         });
+        // Campo de busca com lupa: filtra as observações enquanto o servidor digita (ex: "SISC" -> 3 opções do SISCONDJ)
+        const buscaObs = criarBuscaParaSelect(select, 'Buscar observação... (ex: SISC)');
+        container.appendChild(buscaObs.elemento);
         container.appendChild(select);
 
         const divExtra = document.createElement('div');
@@ -225,6 +416,52 @@
         divDataOuMotivo.appendChild(inputMotivoDM);
         container.appendChild(divDataOuMotivo);
 
+        // Div extra de "SCGA-Em desacordo com a IS": busca + submenu de motivos + campo livre para "Outros motivos:"
+        const divScga = document.createElement('div');
+        divScga.id = 'divScgaTontom';
+        divScga.style.cssText = 'display: none; margin-top: 8px;';
+
+        const labelScga = document.createElement('label');
+        labelScga.innerText = 'selecione o motivo pelo qual não é possível cumprir o pedido solicitado no SCGA:';
+        labelScga.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
+
+        const selectScga = document.createElement('select');
+        selectScga.id = 'selectScgaTontom';
+        selectScga.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; background-color: #fff; cursor: pointer;';
+
+        const optScgaDefault = document.createElement('option');
+        optScgaDefault.value = '';
+        optScgaDefault.innerText = '-- Selecione o motivo --';
+        selectScga.appendChild(optScgaDefault);
+        MOTIVOS_SCGA_IS.forEach(motivo => {
+            const opt = document.createElement('option');
+            opt.value = motivo;
+            opt.innerText = motivo;
+            selectScga.appendChild(opt);
+        });
+
+        const buscaScga = criarBuscaParaSelect(selectScga, 'Buscar motivo...');
+
+        const divScgaOutros = document.createElement('div');
+        divScgaOutros.style.cssText = 'display: none; margin-top: 8px;';
+
+        const labelScgaOutros = document.createElement('label');
+        labelScgaOutros.innerText = 'Descreva o motivo pelo qual o pedido está em desacordo com a IS:';
+        labelScgaOutros.style.cssText = 'display: block; font-size: 12px; font-weight: bold; margin-bottom: 3px; color: #495057;';
+
+        const inputScgaOutros = document.createElement('input');
+        inputScgaOutros.type = 'text';
+        inputScgaOutros.style.cssText = 'width: 100%; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;';
+
+        divScgaOutros.appendChild(labelScgaOutros);
+        divScgaOutros.appendChild(inputScgaOutros);
+
+        divScga.appendChild(labelScga);
+        divScga.appendChild(buscaScga.elemento);
+        divScga.appendChild(selectScga);
+        divScga.appendChild(divScgaOutros);
+        container.appendChild(divScga);
+
         txtAreaOriginal.parentNode.insertBefore(container, txtAreaOriginal);
 
         // --- Sincronização do Checkbox de Notificação (Tontom) ---
@@ -312,6 +549,11 @@
             inputDataDM.style.borderColor = '#ced4da';
             erroDataDM.style.display = 'none';
             inputMotivoDM.value = '';
+            divScga.style.display = 'none';
+            selectScga.value = '';
+            buscaScga.limpar();
+            divScgaOutros.style.display = 'none';
+            inputScgaOutros.value = '';
         }
 
         select.addEventListener('change', function() {
@@ -324,8 +566,16 @@
             const opcaoSelecionada = opcoesPadrao[idx];
             textoPrevioAoSelect = txtAreaOriginal.value.trim();
 
+            // Lógica do SCGA-Em desacordo com a IS (submenu de motivos)
+            if (opcaoSelecionada.precisaScga) {
+                esconderTodosExtras();
+                divScga.style.display = 'block';
+                selectScga.value = '';
+                buscaScga.focar();
+                acumularTextoOficial(opcaoSelecionada.prefixo);
+            }
             // Lógica do campo de data + motivo (ARQUIVO PROVISÓRIO)
-            if (opcaoSelecionada.tipoExtra === 'dataOuMotivo') {
+            else if (opcaoSelecionada.tipoExtra === 'dataOuMotivo') {
                 esconderTodosExtras();
                 divDataOuMotivo.style.display = 'block';
                 inputDataDM.value = '';
@@ -474,6 +724,58 @@
                 inputDataDM.value = '';
                 inputMotivoDM.value = '';
                 txtAreaOriginal.focus();
+            }
+        });
+
+        // Lógica de seleção do motivo "SCGA-Em desacordo com a IS"
+        function finalizarSelecaoScga() {
+            select.value = '';
+            divScga.style.display = 'none';
+            selectScga.value = '';
+            buscaScga.limpar();
+            divScgaOutros.style.display = 'none';
+            inputScgaOutros.value = '';
+            txtAreaOriginal.focus();
+        }
+
+        selectScga.addEventListener('change', function() {
+            const val = this.value;
+            const opcaoSelecionada = opcoesPadrao[select.value];
+            if (!opcaoSelecionada || !opcaoSelecionada.precisaScga) return;
+
+            if (!val) {
+                divScgaOutros.style.display = 'none';
+                inputScgaOutros.value = '';
+                substituirTextoTemporario(opcaoSelecionada.prefixo);
+                return;
+            }
+
+            // "Outros motivos:" abre um campo livre para o servidor escrever o motivo
+            if (val === MOTIVO_SCGA_OUTROS) {
+                divScgaOutros.style.display = 'block';
+                inputScgaOutros.value = '';
+                inputScgaOutros.focus();
+                substituirTextoTemporario(opcaoSelecionada.prefixo);
+                return;
+            }
+
+            divScgaOutros.style.display = 'none';
+            inputScgaOutros.value = '';
+            substituirTextoTemporario(`${opcaoSelecionada.prefixo} | Motivo: ${val}`);
+            finalizarSelecaoScga();
+        });
+
+        inputScgaOutros.addEventListener('input', function() {
+            const opcaoSelecionada = opcoesPadrao[select.value];
+            if (!opcaoSelecionada || !opcaoSelecionada.precisaScga) return;
+            const motivoLivre = this.value.trim();
+            substituirTextoTemporario(motivoLivre ? `${opcaoSelecionada.prefixo} | Motivo: ${motivoLivre}` : opcaoSelecionada.prefixo);
+        });
+
+        inputScgaOutros.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                finalizarSelecaoScga();
             }
         });
     }
@@ -903,6 +1205,8 @@
         }
         
         BANCO_PRIORIDADES.clear();
+        BANCO_SCGA.clear();
+        BANCO_PRIO_DESC.clear();
 
         dados.forEach(row => {
             const npuBruto = row[idxNPU >= 0 ? idxNPU : 0];
@@ -912,10 +1216,14 @@
 
             let prioridadeIdentificada = 1;
             let tagEspecialIdentificada = null;
+            let scgaIdentificada = false;
+            let descScgaIdentificada = null;
 
             if (idxTipo >= 0) {
                 prioridadeIdentificada = extrairPrioridade(row[idxTipo]) || 1;
                 tagEspecialIdentificada = extrairTagEspecial(row[idxTipo]);
+                descScgaIdentificada = identificarPrioridadeSCGA(row[idxTipo]);
+                scgaIdentificada = temTagSCGA(row[idxTipo]) || descScgaIdentificada !== null;
             } else {
                 for (let i = 0; i < row.length; i++) {
                     if (i === idxNPU || i === idxData) continue;
@@ -923,15 +1231,21 @@
                     if (p) prioridadeIdentificada = p;
                     const tagEsp = extrairTagEspecial(row[i]);
                     if (tagEsp) tagEspecialIdentificada = tagEsp;
-                    if (p && tagEsp) break;
+                    const descScga = identificarPrioridadeSCGA(row[i]);
+                    if (descScga) descScgaIdentificada = descScga;
+                    if (temTagSCGA(row[i]) || descScga) scgaIdentificada = true;
                 }
             }
             const dataStr = idxData >= 0 ? row[idxData] : null;
             BANCO_PRIORIDADES.set(chaveCurta, {
                 prioridade: prioridadeIdentificada,
                 tagEspecial: tagEspecialIdentificada,
-                data: dataStr
+                data: dataStr,
+                scga: scgaIdentificada,
+                descScga: descScgaIdentificada
             });
+            if (scgaIdentificada) BANCO_SCGA.add(chaveCurta);
+            if (descScgaIdentificada) BANCO_PRIO_DESC.set(chaveCurta, descScgaIdentificada);
         });
         
         console.log("😸 [Tontom] Planilha carregada. Itens no banco de prioridades:", BANCO_PRIORIDADES.size);
@@ -1005,6 +1319,15 @@
                                         tagEspNode.textContent = tagEspecial;
                                         tagEspNode.title = tagEspecial;
                                         el.appendChild(tagEspNode);
+                                    }
+
+                                    // Tag amarela SCGA, quando a célula da planilha traz [SCGA] ou prioridade SCGA
+                                    if (BANCO_SCGA.has(chaveCurta) || (typeof p === 'object' && p.scga)) {
+                                        const tagScgaNode = document.createElement("span");
+                                        tagScgaNode.className = "tag-prioridade tag-scga";
+                                        tagScgaNode.textContent = "SCGA";
+                                        tagScgaNode.title = "SCGA";
+                                        el.appendChild(tagScgaNode);
                                     }
                                 }
                             });
