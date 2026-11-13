@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          Tontom-Simap - Gestores
 // @namespace     simap-tjpe
-// @version      1.8.4
+// @version      1.9.1
 // @description   Extensão para gestores: injeta tags de prioridade (P1-P9), tags de Saldo/INCON/SCGA nos NPUs, busca no menu, opção SCGA-Em desacordo com a IS, menu de observações padronizadas e botão flutuante Colar NPU e Buscar
 // @match         https://simap.svc.tjpe.jus.br/*
 // @match         https://*.tjpe.jus.br/*
@@ -18,6 +18,19 @@
     'use strict';
     const isPJe = window.location.hostname.includes("pje");
     const URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1RFS3XkGQ7Ga1NqCMXJmqYGcR-JBCXtYB7r51quVb0yE/edit?gid=1744875210";
+    const URL_PLANILHA_OBSERVACOES = "https://docs.google.com/spreadsheets/d/1RFS3XkGQ7Ga1NqCMXJmqYGcR-JBCXtYB7r51quVb0yE/edit?gid=388351178";
+    let opcoesObservacoesDinamicas = null;
+    let callbackAtualizarMenuObservacoes = null;
+
+    try {
+        const cacheObs = localStorage.getItem('tontom_obs_cache_v1');
+        if (cacheObs) {
+            const parsed = JSON.parse(cacheObs);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                opcoesObservacoesDinamicas = parsed;
+            }
+        }
+    } catch (e) {}
 
     console.log("😸 [Tontom] Iniciando extensão Gestores v1.8.4...");
 
@@ -300,19 +313,38 @@
         select.id = 'selectObsTontom';
         select.style.cssText = 'width: 100%; padding: 6px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; background-color: #fff; cursor: pointer;';
 
-        const optDefault = document.createElement('option');
-        optDefault.value = '';
-        optDefault.innerText = '-- Escolha uma opção (Opcional) --';
-        select.appendChild(optDefault);
+        const listaInicial = (opcoesObservacoesDinamicas && opcoesObservacoesDinamicas.length > 0)
+            ? opcoesObservacoesDinamicas
+            : opcoesPadrao;
 
-        opcoesPadrao.forEach((opt, index) => {
-            const o = document.createElement('option');
-            o.value = index;
-            o.innerText = opt.display;
-            select.appendChild(o);
-        });
-        // Campo de busca com lupa: filtra as observações enquanto o servidor digita (ex: "SISC" -> 3 opções do SISCONDJ)
+        let opcoesMenu = [];
+
+        function popularSelect(lista) {
+            opcoesMenu = [...lista];
+            select.innerHTML = '';
+            const optDefault = document.createElement('option');
+            optDefault.value = '';
+            optDefault.innerText = '-- Escolha uma opção (Opcional) --';
+            select.appendChild(optDefault);
+
+            opcoesMenu.forEach((opt, index) => {
+                const o = document.createElement('option');
+                o.value = index;
+                o.innerText = opt.display;
+                select.appendChild(o);
+            });
+            buscaObs.limpar();
+        }
+
         const buscaObs = criarBuscaParaSelect(select, 'Buscar observação... (ex: SISC)');
+        popularSelect(listaInicial);
+
+        callbackAtualizarMenuObservacoes = function() {
+            if (document.getElementById('containerMenuTontom') && opcoesObservacoesDinamicas) {
+                popularSelect(opcoesObservacoesDinamicas);
+            }
+        };
+
         container.appendChild(buscaObs.elemento);
         container.appendChild(select);
 
@@ -563,14 +595,36 @@
                 return;
             }
 
-            const opcaoSelecionada = opcoesPadrao[idx];
+            const opcaoSelecionada = opcoesMenu[idx];
             textoPrevioAoSelect = txtAreaOriginal.value.trim();
 
             // Lógica do SCGA-Em desacordo com a IS (submenu de motivos)
             if (opcaoSelecionada.precisaScga) {
                 esconderTodosExtras();
                 divScga.style.display = 'block';
+
+                if (opcaoSelecionada.labelScga) {
+                    labelScga.innerText = opcaoSelecionada.labelScga;
+                }
+
+                const motivosAtuais = (opcaoSelecionada.subOpcoes && opcaoSelecionada.subOpcoes.length > 0)
+                    ? opcaoSelecionada.subOpcoes
+                    : MOTIVOS_SCGA_IS;
+
+                selectScga.innerHTML = '';
+                const optScgaDefault = document.createElement('option');
+                optScgaDefault.value = '';
+                optScgaDefault.innerText = '-- Selecione o motivo --';
+                selectScga.appendChild(optScgaDefault);
+                motivosAtuais.forEach(motivo => {
+                    const opt = document.createElement('option');
+                    opt.value = motivo;
+                    opt.innerText = motivo;
+                    selectScga.appendChild(opt);
+                });
+
                 selectScga.value = '';
+                buscaScga.limpar();
                 buscaScga.focar();
                 acumularTextoOficial(opcaoSelecionada.prefixo);
             }
@@ -619,7 +673,7 @@
             const idx = select.value;
             if (idx === '') return;
 
-            const opcaoSelecionada = opcoesPadrao[idx];
+            const opcaoSelecionada = opcoesMenu[idx];
 
             if (opcaoSelecionada.tipoExtra === 'data') {
                 let val = this.value.replace(/\D/g, '');
@@ -648,7 +702,14 @@
                 }
             } else {
                 const infoAdicional = this.value.trim();
-                const textoTermo = infoAdicional ? `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${infoAdicional}` : opcaoSelecionada.prefixo;
+                let textoTermo;
+                if (!infoAdicional) {
+                    textoTermo = opcaoSelecionada.prefixo;
+                } else if (opcaoSelecionada.rotuloExtra) {
+                    textoTermo = `${opcaoSelecionada.prefixo} | ${opcaoSelecionada.rotuloExtra}: ${infoAdicional}`;
+                } else {
+                    textoTermo = `${opcaoSelecionada.prefixo} | ${infoAdicional}`;
+                }
                 substituirTextoTemporario(textoTermo);
             }
         });
@@ -658,7 +719,7 @@
                 e.preventDefault();
                 const idx = select.value;
                 if (idx !== '') {
-                    const opc = opcoesPadrao[idx];
+                    const opc = opcoesMenu[idx];
                     if (opc.tipoExtra === 'data' && inputExtra.value.length === 10 && !validarDataDDMMAAAA(inputExtra.value)) {
                         return;
                     }
@@ -676,7 +737,7 @@
         function atualizarTextoDataOuMotivo() {
             const idx = select.value;
             if (idx === '') return;
-            const opcaoSelecionada = opcoesPadrao[idx];
+            const opcaoSelecionada = opcoesMenu[idx];
             const dataVal = inputDataDM.value.trim();
             const motivoVal = inputMotivoDM.value.trim();
 
@@ -740,7 +801,7 @@
 
         selectScga.addEventListener('change', function() {
             const val = this.value;
-            const opcaoSelecionada = opcoesPadrao[select.value];
+            const opcaoSelecionada = opcoesMenu[select.value];
             if (!opcaoSelecionada || !opcaoSelecionada.precisaScga) return;
 
             if (!val) {
@@ -766,7 +827,7 @@
         });
 
         inputScgaOutros.addEventListener('input', function() {
-            const opcaoSelecionada = opcoesPadrao[select.value];
+            const opcaoSelecionada = opcoesMenu[select.value];
             if (!opcaoSelecionada || !opcaoSelecionada.precisaScga) return;
             const motivoLivre = this.value.trim();
             substituirTextoTemporario(motivoLivre ? `${opcaoSelecionada.prefixo} | Motivo: ${motivoLivre}` : opcaoSelecionada.prefixo);
@@ -1281,6 +1342,145 @@
             });
     }
 
+    function processarObservacoesPlanilha(matriz) {
+        if (!matriz || matriz.length === 0) return null;
+
+        let idxAtivo = -1;
+        let idxMenu = -1;
+        let idxPrefixo = -1;
+        let idxTipo = -1;
+        let idxRotulo = -1;
+        let idxSubmenu = -1;
+
+        for (let r = 0; r < Math.min(3, matriz.length); r++) {
+            const rowNorm = matriz[r].map(c => normalizarTextoPlanilha(c || ''));
+            rowNorm.forEach((col, i) => {
+                if (idxAtivo === -1 && /^ATIVO\b/i.test(col)) idxAtivo = i;
+                if (idxMenu === -1 && /MENU/i.test(col)) idxMenu = i;
+                if (idxPrefixo === -1 && /PREFIXO|TEXTO BASE/i.test(col)) idxPrefixo = i;
+                if (idxTipo === -1 && /TIPO/i.test(col)) idxTipo = i;
+                if (idxRotulo === -1 && /ROTULO|PERGUNTA/i.test(col)) idxRotulo = i;
+                if (idxSubmenu === -1 && /SUBMENU/i.test(col)) idxSubmenu = i;
+            });
+        }
+
+        if (idxAtivo === -1) idxAtivo = 1;
+        if (idxMenu === -1) idxMenu = 2;
+        if (idxPrefixo === -1) idxPrefixo = 3;
+        if (idxTipo === -1) idxTipo = 4;
+        if (idxRotulo === -1) idxRotulo = 5;
+        if (idxSubmenu === -1) idxSubmenu = 6;
+
+        const ROTULOS_PADRAO = {
+            "SUPERVISÃO/DÚVIDA": "Detalhe",
+            "SUPERVISAO/DUVIDA": "Detalhe",
+            "*SERVIDOR": "Lembrete",
+            "*ERRO DE FLUXO": "Chamado"
+        };
+
+        const resultado = [];
+
+        for (let r = 1; r < matriz.length; r++) {
+            const row = matriz[r];
+            if (!row || row.length === 0) continue;
+
+            const colAtivo = normalizarTextoPlanilha(row[idxAtivo] || '');
+            if (colAtivo !== 'SIM' && colAtivo !== 'S') continue;
+
+            const display = (row[idxMenu] || '').trim();
+            if (!display) continue;
+
+            const prefixo = (row[idxPrefixo] || '').trim() || display;
+            const tipoNorm = normalizarTextoPlanilha(row[idxTipo] || '');
+            const labelPergunta = (row[idxRotulo] || '').trim();
+            const subOpcoesRaw = (row[idxSubmenu] || '').trim();
+
+            let item = {
+                display: display,
+                prefixo: prefixo,
+                precisaExtra: false
+            };
+
+            if (tipoNorm.includes('DATA OU MOTIVO') || tipoNorm.includes('DATA/MOTIVO') || tipoNorm.includes('DATA MOTIVO')) {
+                item.precisaExtra = true;
+                item.tipoExtra = 'dataOuMotivo';
+                item.labelExtra = labelPergunta || 'Data de Retorno e Motivo:';
+                item.rotuloExtra = 'Info';
+            } else if (tipoNorm.includes('DATA')) {
+                item.precisaExtra = true;
+                item.tipoExtra = 'data';
+                item.labelExtra = labelPergunta || 'Informe a Data de Retorno:';
+                item.rotuloExtra = 'Data de Retorno';
+            } else if (tipoNorm.includes('LIVRE') || tipoNorm.includes('ABERTO') || tipoNorm.includes('TEXTO')) {
+                item.precisaExtra = true;
+                item.tipoExtra = 'texto';
+                item.labelExtra = labelPergunta || 'Digite a observação:';
+                item.rotuloExtra = ROTULOS_PADRAO[prefixo] || (labelPergunta.toUpperCase().includes('Nº') ? 'Nº' : '');
+            } else if (tipoNorm.includes('SUBMENU') || display.toUpperCase().includes('SCGA')) {
+                item.precisaScga = true;
+                item.labelScga = labelPergunta || 'selecione o motivo pelo qual não é possível cumprir o pedido solicitado no SCGA:';
+                if (subOpcoesRaw) {
+                    item.subOpcoes = subOpcoesRaw.split(';').map(s => s.trim()).filter(Boolean);
+                }
+            }
+
+            resultado.push(item);
+        }
+
+        return resultado.length > 0 ? resultado : null;
+    }
+
+    function carregarObservacoesPlanilha() {
+        const { id, gid } = extrairIdEAbas(URL_PLANILHA_OBSERVACOES);
+        if (!id) return;
+        const csvUrl = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}&headers=0&_t=${Date.now()}`;
+        console.log("😸 [Tontom] Carregando observações da planilha...", csvUrl);
+
+        function processarResposta(csvTexto) {
+            try {
+                const matriz = parsearCSV(csvTexto);
+                console.log("😸 [Tontom] CSV de observações recebido. Linhas:", matriz.length);
+                const novas = processarObservacoesPlanilha(matriz);
+                if (novas && novas.length > 0) {
+                    console.log("😸 [Tontom] Observações carregadas com sucesso da planilha:", novas.length, "itens.");
+                    opcoesObservacoesDinamicas = novas;
+                    try {
+                        localStorage.setItem('tontom_obs_cache_v1', JSON.stringify(novas));
+                    } catch (e) {}
+                    if (typeof callbackAtualizarMenuObservacoes === 'function') {
+                        callbackAtualizarMenuObservacoes();
+                    }
+                } else {
+                    console.warn("😸 [Tontom] Nenhuma observação ativa encontrada no CSV da planilha.");
+                }
+            } catch (err) {
+                console.error('[Tontom] Erro ao processar observações da planilha:', err);
+            }
+        }
+
+        if (typeof GM_xmlhttpRequest !== 'undefined') {
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: csvUrl,
+                onload: function(response) {
+                    if (response.status === 200) {
+                        processarResposta(response.responseText);
+                    } else {
+                        console.warn("😸 [Tontom] Falha HTTP ao carregar observações:", response.status);
+                    }
+                },
+                onerror: function(err) {
+                    console.error("😸 [Tontom] Erro de rede ao carregar observações:", err);
+                }
+            });
+        } else {
+            fetch(csvUrl)
+                .then(res => res.ok ? res.text() : Promise.reject())
+                .then(processarResposta)
+                .catch(err => console.error("😸 [Tontom] Erro fetch ao carregar observações:", err));
+        }
+    }
+
     function aplicarTagsNaTela() {
         if (BANCO_PRIORIDADES.size === 0) return;
         const regexNPU = /\b\d{7}[-.]?\d{1,2}([-.]?\d{4}[-.]?\d[-.]?\d{2}[-.]?\d{4})?\b/g;
@@ -1341,6 +1541,12 @@
     // Inicialização
     mostrarAvisoCarregamento();
     carregarDadosPlanilha();
+    carregarObservacoesPlanilha();
+
+    // Atualiza observações periodicamente a cada 5 minutos
+    setInterval(() => {
+        carregarObservacoesPlanilha();
+    }, 5 * 60 * 1000);
 
     if (!isPJe) {
         criarBotaoColaNPU();
